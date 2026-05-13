@@ -1,0 +1,35 @@
+# Build outputs
+.gradle/
+build/
+**/build/
+*.apk
+*.aab
+*.dex
+
+# Local environment (machine-specific paths)
+local.properties
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Large binaries — should not be in source control
+# Re-download via the install scripts / Tencent mirror as needed
+*.zip
+android-sdk/
+gradle-8.2/
+
+# Workaround tmpdir (Java AF_UNIX issue with C:\ user temp)
+.gradle-tmp/
+
+# Native build
+.externalNativeBuild/
+.cxx/
+
+# Captures
+captures/
+
+# Misc
+*.class
+*.log
