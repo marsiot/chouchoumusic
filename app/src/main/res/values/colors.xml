@@ -1,7 +1,22 @@
 <resources>
-    <color name="purple_500">#6200EE</color>
-    <color name="purple_700">#3700B3</color>
-    <color name="teal_200">#03DAC5</color>
+    <!-- Base surfaces -->
+    <color name="bg">#FF0A0A0A</color>
+    <color name="bg_elevated">#FF141414</color>
+    <color name="bg_overlay">#F2080808</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFF2F0EC</color>
+    <color name="text_secondary">#FF8B847B</color>
+    <color name="text_tertiary">#FF4A4744</color>
+
+    <!-- Single accent (warm sand / brushed brass) -->
+    <color name="accent">#FFC9A876</color>
+    <color name="accent_dim">#FF5A4B33</color>
+
+    <!-- Dividers / fine lines -->
+    <color name="divider">#FF1A1A1A</color>
+
+    <!-- Legacy (kept for compat) -->
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 </resources>

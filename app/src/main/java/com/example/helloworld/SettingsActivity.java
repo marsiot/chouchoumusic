@@ -2,12 +2,16 @@ package com.example.helloworld;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.PorterDuff;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -19,8 +23,19 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 public class SettingsActivity extends AppCompatActivity {
+
+    private static final int COLOR_BG = 0xFF0A0A0A;
+    private static final int COLOR_ELEVATED = 0xFF141414;
+    private static final int COLOR_PRIMARY = 0xFFF2F0EC;
+    private static final int COLOR_SECONDARY = 0xFF8B847B;
+    private static final int COLOR_TERTIARY = 0xFF4A4744;
+    private static final int COLOR_ACCENT = 0xFFC9A876;
+    private static final int COLOR_DIVIDER = 0xFF1A1A1A;
+    private static final int COLOR_OK = 0xFF8FBC8F;
+    private static final int COLOR_ERR = 0xFFD08770;
 
     private SharedPreferences sp;
     private LinearLayout container;
@@ -34,23 +49,21 @@ public class SettingsActivity extends AppCompatActivity {
         Providers.migrateLegacyPrefs(sp);
 
         container = findViewById(R.id.providersContainer);
+        findViewById(R.id.btnClose).setOnClickListener(v -> finish());
 
         TextView intro = new TextView(this);
-        intro.setText("启用多个服务商可在前一个调用失败时自动切到下一个。Key 仅保存在本机，不会上传。");
-        intro.setTextColor(0x99FFFFFF & 0x99FFFFFF | 0xFF000000);
-        intro.setTextColor(Color.parseColor("#FF666666"));
-        intro.setTextSize(13f);
+        intro.setText("启用多个平台时，前一个失败会自动切到下一个。Key 仅保存本机。");
+        intro.setTextColor(COLOR_SECONDARY);
+        intro.setTextSize(12f);
         LinearLayout.LayoutParams introLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        introLp.bottomMargin = dp(12);
+        introLp.bottomMargin = dp(16);
         intro.setLayoutParams(introLp);
         container.addView(intro);
 
         for (AiClassifier.Provider p : AiClassifier.Provider.values()) {
             container.addView(buildProviderCard(p));
         }
-
-        findViewById(R.id.btnClose).setOnClickListener(v -> finish());
     }
 
     private int dp(int v) {
@@ -60,22 +73,27 @@ public class SettingsActivity extends AppCompatActivity {
     private View buildProviderCard(AiClassifier.Provider p) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setBackgroundColor(Color.parseColor("#FFFFFFFF"));
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(COLOR_ELEVATED);
+        bg.setCornerRadius(dp(14));
+        card.setBackground(bg);
+
+        card.setPadding(dp(18), dp(16), dp(18), dp(16));
         LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        cardLp.bottomMargin = dp(10);
+        cardLp.bottomMargin = dp(12);
         card.setLayoutParams(cardLp);
 
+        // Title row: name | pricing | switch
         LinearLayout titleRow = new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
-        titleRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
 
         TextView label = new TextView(this);
         label.setText(p.label);
-        label.setTextColor(Color.parseColor("#FF222222"));
-        label.setTextSize(16f);
-        label.setTypeface(label.getTypeface(), android.graphics.Typeface.BOLD);
+        label.setTextColor(COLOR_PRIMARY);
+        label.setTextSize(15f);
         LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         labelLp.weight = 1;
@@ -84,17 +102,18 @@ public class SettingsActivity extends AppCompatActivity {
 
         Switch sw = new Switch(this);
         sw.setChecked(Providers.isEnabled(sp, p));
+        tintSwitch(sw);
         titleRow.addView(sw);
 
         card.addView(titleRow);
 
         TextView sub = new TextView(this);
         String modelText = p == AiClassifier.Provider.CUSTOM
-                ? (p.pricing)
-                : (p.pricing + " · " + p.model);
+                ? p.pricing
+                : p.pricing + "  ·  " + p.model;
         sub.setText(modelText);
-        sub.setTextColor(Color.parseColor("#FF888888"));
-        sub.setTextSize(12f);
+        sub.setTextColor(COLOR_SECONDARY);
+        sub.setTextSize(11f);
         LinearLayout.LayoutParams subLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         subLp.topMargin = dp(2);
@@ -104,15 +123,14 @@ public class SettingsActivity extends AppCompatActivity {
         final EditText urlInput;
         final EditText modelInput;
         if (p == AiClassifier.Provider.CUSTOM) {
-            urlInput = makeField("Endpoint URL（OpenAI 兼容）",
-                    "https://your-host/v1/chat/completions",
-                    Providers.getCustomUrl(sp), InputType.TYPE_TEXT_VARIATION_URI);
+            urlInput = makeField("Endpoint URL", Providers.getCustomUrl(sp),
+                    InputType.TYPE_TEXT_VARIATION_URI);
             urlInput.addTextChangedListener(new SimpleWatcher(s ->
                     Providers.setCustomUrl(sp, s)));
             card.addView(urlInput);
 
-            modelInput = makeField("模型名", "gpt-4o-mini",
-                    Providers.getCustomModel(sp), InputType.TYPE_CLASS_TEXT);
+            modelInput = makeField("模型名", Providers.getCustomModel(sp),
+                    InputType.TYPE_CLASS_TEXT);
             modelInput.addTextChangedListener(new SimpleWatcher(s ->
                     Providers.setCustomModel(sp, s)));
             card.addView(modelInput);
@@ -121,61 +139,52 @@ public class SettingsActivity extends AppCompatActivity {
             modelInput = null;
         }
 
-        final EditText keyInput = makeField("API Key", "sk-…",
-                Providers.getKey(sp, p), InputType.TYPE_CLASS_TEXT);
-        keyInput.addTextChangedListener(new SimpleWatcher(s ->
-                Providers.setKey(sp, p, s)));
+        final EditText keyInput = makeField("API Key", Providers.getKey(sp, p),
+                InputType.TYPE_CLASS_TEXT);
+        keyInput.addTextChangedListener(new SimpleWatcher(s -> Providers.setKey(sp, p, s)));
         card.addView(keyInput);
 
+        // Help link row
         if (p.signupUrl != null) {
-            LinearLayout helpRow = new LinearLayout(this);
-            helpRow.setOrientation(LinearLayout.HORIZONTAL);
-            helpRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams helpLp = new LinearLayout.LayoutParams(
+            TextView link = new TextView(this);
+            link.setText("获取 Key  →  " + extractHost(p.signupUrl));
+            link.setTextColor(COLOR_ACCENT);
+            link.setTextSize(12f);
+            LinearLayout.LayoutParams linkLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            helpLp.topMargin = dp(6);
-            helpRow.setLayoutParams(helpLp);
-
-            TextView linkTv = new TextView(this);
-            linkTv.setText("→ 去注册 / 获取 Key");
-            linkTv.setTextColor(Color.parseColor("#FF3F51B5"));
-            linkTv.setTextSize(13f);
-            LinearLayout.LayoutParams linkLp = new LinearLayout.LayoutParams(0,
-                    ViewGroup.LayoutParams.WRAP_CONTENT);
-            linkLp.weight = 1;
-            linkTv.setLayoutParams(linkLp);
-            linkTv.setOnClickListener(v -> openUrl(p.signupUrl));
-            helpRow.addView(linkTv);
-
-            TextView hostTv = new TextView(this);
-            hostTv.setText("(" + extractHost(p.signupUrl) + ")");
-            hostTv.setTextColor(Color.parseColor("#FF888888"));
-            hostTv.setTextSize(11f);
-            helpRow.addView(hostTv);
-
-            card.addView(helpRow);
+            linkLp.topMargin = dp(10);
+            link.setLayoutParams(linkLp);
+            link.setOnClickListener(v -> openUrl(p.signupUrl));
+            card.addView(link);
         }
 
+        // Test row
         LinearLayout testRow = new LinearLayout(this);
         testRow.setOrientation(LinearLayout.HORIZONTAL);
-        testRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        testRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams testRowLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        testRowLp.topMargin = dp(8);
+        testRowLp.topMargin = dp(12);
         testRow.setLayoutParams(testRowLp);
 
         final Button btnTest = new Button(this);
         btnTest.setText("测试连接");
+        btnTest.setTextSize(12f);
+        btnTest.setAllCaps(false);
+        btnTest.setTextColor(COLOR_BG);
+        btnTest.setBackgroundTintList(ColorStateList.valueOf(COLOR_ACCENT));
         btnTest.setMinWidth(0);
+        btnTest.setMinHeight(0);
+        btnTest.setPadding(dp(14), dp(6), dp(14), dp(6));
         testRow.addView(btnTest);
 
         final TextView resultTv = new TextView(this);
-        resultTv.setTextSize(12f);
-        resultTv.setTextColor(Color.parseColor("#FF666666"));
+        resultTv.setTextSize(11f);
+        resultTv.setTextColor(COLOR_SECONDARY);
         LinearLayout.LayoutParams resultLp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         resultLp.weight = 1;
-        resultLp.leftMargin = dp(8);
+        resultLp.leftMargin = dp(12);
         resultTv.setLayoutParams(resultLp);
         testRow.addView(resultTv);
 
@@ -185,7 +194,7 @@ public class SettingsActivity extends AppCompatActivity {
             String k = keyInput.getText().toString().trim();
             if (k.isEmpty()) {
                 resultTv.setText("请先填 Key");
-                resultTv.setTextColor(Color.parseColor("#FFC62828"));
+                resultTv.setTextColor(COLOR_ERR);
                 return;
             }
             String u = (p == AiClassifier.Provider.CUSTOM && urlInput != null)
@@ -193,14 +202,14 @@ public class SettingsActivity extends AppCompatActivity {
             String m = (p == AiClassifier.Provider.CUSTOM && modelInput != null)
                     ? modelInput.getText().toString().trim() : p.model;
             if (u == null || u.isEmpty() || m == null || m.isEmpty()) {
-                resultTv.setText("URL/模型不能为空");
-                resultTv.setTextColor(Color.parseColor("#FFC62828"));
+                resultTv.setText("URL / 模型不能为空");
+                resultTv.setTextColor(COLOR_ERR);
                 return;
             }
             btnTest.setEnabled(false);
             btnTest.setText("测试中…");
             resultTv.setText("等待响应…");
-            resultTv.setTextColor(Color.parseColor("#FF666666"));
+            resultTv.setTextColor(COLOR_SECONDARY);
 
             AiClassifier tester = new AiClassifier(u, m, k,
                     AiClassifier.BUILTIN_SCENES, p.label);
@@ -208,11 +217,11 @@ public class SettingsActivity extends AppCompatActivity {
                 btnTest.setEnabled(true);
                 btnTest.setText("测试连接");
                 if (ok) {
-                    resultTv.setText("✓ " + msg);
-                    resultTv.setTextColor(Color.parseColor("#FF2E7D32"));
+                    resultTv.setText("通过  ·  " + msg);
+                    resultTv.setTextColor(COLOR_OK);
                 } else {
-                    resultTv.setText("✗ " + msg);
-                    resultTv.setTextColor(Color.parseColor("#FFC62828"));
+                    resultTv.setText("失败  ·  " + msg);
+                    resultTv.setTextColor(COLOR_ERR);
                 }
             });
         });
@@ -223,21 +232,43 @@ public class SettingsActivity extends AppCompatActivity {
         return card;
     }
 
-    private EditText makeField(String hint, String exampleHint, String value, int inputType) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(6);
-
+    private EditText makeField(String hint, String value, int inputType) {
         EditText et = new EditText(this);
-        et.setHint(exampleHint == null ? hint : exampleHint);
+        et.setHint(hint);
         et.setInputType(inputType);
         et.setSingleLine(true);
         et.setText(value == null ? "" : value);
-        et.setTextColor(Color.parseColor("#FF222222"));
-        et.setHintTextColor(Color.parseColor("#FFBBBBBB"));
+        et.setTextColor(COLOR_PRIMARY);
+        et.setHintTextColor(COLOR_TERTIARY);
         et.setTextSize(13f);
+
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(COLOR_BG);
+        bg.setCornerRadius(dp(8));
+        bg.setStroke(1, COLOR_DIVIDER);
+        et.setBackground(bg);
+
+        et.setPadding(dp(12), dp(10), dp(12), dp(10));
+
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(10);
         et.setLayoutParams(lp);
+
         return et;
+    }
+
+    private void tintSwitch(Switch sw) {
+        int off = COLOR_TERTIARY;
+        int on = COLOR_ACCENT;
+        ColorStateList thumb = new ColorStateList(
+                new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
+                new int[]{on, COLOR_SECONDARY});
+        ColorStateList track = new ColorStateList(
+                new int[][]{new int[]{android.R.attr.state_checked}, new int[]{}},
+                new int[]{(on & 0x00FFFFFF) | 0x66000000, off});
+        sw.setThumbTintList(thumb);
+        sw.setTrackTintList(track);
     }
 
     private void openUrl(String url) {
