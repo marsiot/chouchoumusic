@@ -73,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
 
     private final List<String> customScenes = new ArrayList<>();
     private final Set<String> deletedBuiltins = new HashSet<>();
+    private OnBackPressedCallback backCallback;
     private String scanRootDir = Providers.DEFAULT_SCAN_DIR;
 
     private enum Mode { FOLDERS, SONGS, SCENE_SONGS }
@@ -541,7 +542,7 @@ public class MainActivity extends AppCompatActivity {
         updatePlayButton();
         updateModeButton();
 
-        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+        backCallback = new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
                 if (selectionMode) {
@@ -555,12 +556,14 @@ public class MainActivity extends AppCompatActivity {
                 }
                 if (mode == Mode.SONGS || mode == Mode.SCENE_SONGS) {
                     showFolders();
-                } else {
-                    setEnabled(false);
-                    getOnBackPressedDispatcher().onBackPressed();
+                    return;
                 }
+                setEnabled(false);
+                getOnBackPressedDispatcher().onBackPressed();
+                setEnabled(true);
             }
-        });
+        };
+        getOnBackPressedDispatcher().addCallback(this, backCallback);
 
         if (hasPermission()) {
             loadAndShow();
@@ -3160,6 +3163,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (backCallback != null) backCallback.setEnabled(true);
         classifierPool = null;
 
         SharedPreferences sp = Providers.prefs(this);
