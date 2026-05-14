@@ -9,7 +9,7 @@ set PATH=%PATH%;%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\build-tools\34.0.0
 
 set ADB=%ANDROID_HOME%\platform-tools\adb.exe
 set APK=%PROJECT_DIR%\app\build\outputs\apk\debug\app-debug.apk
-set PACKAGE=com.example.helloworld
+set PACKAGE=com.chouchou.music
 set MAIN=%PACKAGE%/.MainActivity
 
 if not exist "%TEMP%" mkdir "%TEMP%"

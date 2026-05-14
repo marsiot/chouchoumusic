@@ -1,4 +1,4 @@
-package com.example.helloworld;
+package com.chouchou.music;
 
 import android.os.Handler;
 import android.os.Looper;

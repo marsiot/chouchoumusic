@@ -1,4 +1,4 @@
-package com.example.helloworld;
+package com.chouchou.music;
 
 import android.util.Log;
 

@@ -12,7 +12,7 @@ REM ===============================================================
 set "PROJECT_DIR=%~dp0"
 if "%PROJECT_DIR:~-1%"=="\" set "PROJECT_DIR=%PROJECT_DIR:~0,-1%"
 set "ADB=%PROJECT_DIR%\android-sdk\platform-tools\adb.exe"
-set "PACKAGE=com.example.helloworld"
+set "PACKAGE=com.chouchou.music"
 set "MAIN=%PACKAGE%/.MainActivity"
 
 if not exist "%ADB%" (

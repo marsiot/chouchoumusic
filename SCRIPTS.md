@@ -107,9 +107,9 @@ cd chouchou-music
 **典型输出**：
 ```
 05-14 11:07:48.090 24179 24179 E AndroidRuntime: FATAL EXCEPTION: main
-05-14 11:07:48.090 24179 24179 E AndroidRuntime: Process: com.example.helloworld, PID: 24179
+05-14 11:07:48.090 24179 24179 E AndroidRuntime: Process: com.chouchou.music, PID: 24179
 05-14 11:07:48.090 24179 24179 E AndroidRuntime: java.lang.NullPointerException: ...
-05-14 11:07:48.090 24179 24179 E AndroidRuntime:    at com.example.helloworld.MainActivity.runNextBatch(MainActivity.java:1151)
+05-14 11:07:48.090 24179 24179 E AndroidRuntime:    at com.chouchou.music.MainActivity.runNextBatch(MainActivity.java:1151)
    ...
 ```
 

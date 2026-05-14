@@ -4,7 +4,7 @@ setlocal
 set PROJECT_DIR=e:\mywork\chouchou-music
 set ADB=%PROJECT_DIR%\android-sdk\platform-tools\adb.exe
 set APK=%PROJECT_DIR%\app\build\outputs\apk\debug\app-debug.apk
-set PACKAGE=com.example.helloworld
+set PACKAGE=com.chouchou.music
 set MAIN=%PACKAGE%/.MainActivity
 
 if not exist "%ADB%" (

@@ -17,7 +17,7 @@ set "ANDROID_HOME=%PROJECT_DIR%\android-sdk"
 set "GRADLE_HOME=%PROJECT_DIR%\gradle-8.2"
 set "TEMP=%PROJECT_DIR%\.gradle-tmp"
 set "TMP=%PROJECT_DIR%\.gradle-tmp"
-set "PACKAGE=com.example.helloworld"
+set "PACKAGE=com.chouchou.music"
 set "MAIN=%PACKAGE%/.MainActivity"
 
 if not exist "%TEMP%" mkdir "%TEMP%"

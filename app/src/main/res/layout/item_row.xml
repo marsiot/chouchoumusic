@@ -40,7 +40,7 @@
             tools:text="李荣浩" />
     </LinearLayout>
 
-    <com.example.helloworld.EqualizerView
+    <com.chouchou.music.EqualizerView
         android:id="@+id/rowEqualizer"
         android:layout_width="16dp"
         android:layout_height="14dp"
