@@ -61,6 +61,36 @@ public class ClassificationCache {
         if (file.exists()) file.delete();
     }
 
+    public synchronized void retainOnly(Set<String> keysToKeep) {
+        if (keysToKeep == null || keysToKeep.isEmpty()) {
+            clear();
+            return;
+        }
+        boolean changed = data.keySet().retainAll(keysToKeep);
+        if (changed) save();
+    }
+
+    public synchronized void renameTag(String oldTag, String newTag) {
+        if (oldTag == null || newTag == null || oldTag.equals(newTag)) return;
+        boolean changed = false;
+        for (Set<String> scenes : data.values()) {
+            if (scenes.remove(oldTag)) {
+                scenes.add(newTag);
+                changed = true;
+            }
+        }
+        if (changed) save();
+    }
+
+    public synchronized void removeTag(String tag) {
+        if (tag == null) return;
+        boolean changed = false;
+        for (Set<String> scenes : data.values()) {
+            if (scenes.remove(tag)) changed = true;
+        }
+        if (changed) save();
+    }
+
     private void load() {
         if (!file.exists()) return;
         try {

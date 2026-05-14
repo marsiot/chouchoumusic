@@ -40,6 +40,13 @@
             tools:text="李荣浩" />
     </LinearLayout>
 
+    <com.example.helloworld.EqualizerView
+        android:id="@+id/rowEqualizer"
+        android:layout_width="16dp"
+        android:layout_height="14dp"
+        android:layout_marginStart="12dp"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/rowMeta"
         android:layout_width="wrap_content"

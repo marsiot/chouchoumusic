@@ -27,6 +27,7 @@ import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.NumberPicker;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -45,6 +46,8 @@ import com.google.android.material.bottomsheet.BottomSheetBehavior;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -61,13 +64,15 @@ import java.util.TreeMap;
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQ_PERM = 1001;
-    private static final String ROOT_LABEL = "(根目录)";
+    private static final String ROOT_LABEL = "未分类";
     private static final String STORAGE_LABEL = "内部存储";
     private static final String PREFS = Providers.PREFS;
     private static final String KEY_CUSTOM_SCENES = "custom_scenes";
+    private static final String KEY_DELETED_BUILTINS = "deleted_builtin_scenes";
     private static final int BATCH_SIZE = 10;
 
     private final List<String> customScenes = new ArrayList<>();
+    private final Set<String> deletedBuiltins = new HashSet<>();
     private String scanRootDir = Providers.DEFAULT_SCAN_DIR;
 
     private enum Mode { FOLDERS, SONGS, SCENE_SONGS }
@@ -118,6 +123,7 @@ public class MainActivity extends AppCompatActivity {
     private MediaPlayer player;
     private boolean isPrepared = false;
     private List<Song> playQueue = Collections.emptyList();
+    private Row.Kind playSourceKind = null;
     private int playingIndex = -1;
     private String playSourceLabel = null;
 
@@ -137,6 +143,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean scanning = false;
     private int scanDone = 0;
     private int scanTotal = 0;
+    private String mergeStopScene = null;
+    private int mergeStopTarget = 0;
     private int totalSongs = 0;
 
     private final Handler tickHandler = new Handler(Looper.getMainLooper());
@@ -253,6 +261,26 @@ public class MainActivity extends AppCompatActivity {
             notifyDataSetChanged();
         }
 
+        private Row.Kind playingSourceKind = null;
+        private String playingSourceKey = null;
+        private boolean playingActive = false;
+
+        void setPlayingSource(Row.Kind kind, String key) {
+            boolean same = kind == playingSourceKind
+                    && ((key == null && playingSourceKey == null)
+                        || (key != null && key.equals(playingSourceKey)));
+            if (same) return;
+            this.playingSourceKind = kind;
+            this.playingSourceKey = key;
+            notifyDataSetChanged();
+        }
+
+        void setPlayingActive(boolean active) {
+            if (this.playingActive == active) return;
+            this.playingActive = active;
+            notifyDataSetChanged();
+        }
+
         @Override
         public VH onCreateViewHolder(ViewGroup parent, int viewType) {
             View v = LayoutInflater.from(parent.getContext())
@@ -267,18 +295,31 @@ public class MainActivity extends AppCompatActivity {
             h.primary.setText(r.primary);
             boolean isPlayingRow = r.kind == Row.Kind.SONG && r.key != null
                     && r.key.equals(playingPath);
+            boolean isPlayingSourceRow = playingSourceKind != null
+                    && r.kind == playingSourceKind
+                    && r.key != null
+                    && r.key.equals(playingSourceKey);
             if (r.kind == Row.Kind.EMPTY_HINT) {
                 h.primary.setTextColor(colorTertiary);
             } else if (r.kind == Row.Kind.ADD_SCENE || r.kind == Row.Kind.ADD_FOLDER) {
                 h.primary.setTextColor(colorSecondary);
-            } else if (isPlayingRow) {
+            } else if (isPlayingRow || isPlayingSourceRow) {
                 h.primary.setTextColor(colorAccent);
             } else {
                 h.primary.setTextColor(r.accent ? colorAccent : colorPrimary);
             }
             h.primary.setTypeface(android.graphics.Typeface.DEFAULT,
-                    isPlayingRow ? android.graphics.Typeface.BOLD
+                    (isPlayingRow || isPlayingSourceRow)
+                            ? android.graphics.Typeface.BOLD
                             : android.graphics.Typeface.NORMAL);
+
+            if (isPlayingRow || isPlayingSourceRow) {
+                h.equalizer.setVisibility(View.VISIBLE);
+                h.equalizer.setActive(playingActive);
+            } else {
+                h.equalizer.setVisibility(View.GONE);
+                h.equalizer.setActive(false);
+            }
 
             if (r.secondary != null && !r.secondary.isEmpty()) {
                 h.secondary.setVisibility(View.VISIBLE);
@@ -299,6 +340,8 @@ public class MainActivity extends AppCompatActivity {
             boolean inSelectionMode = selectedKeys != null;
             boolean isSongRow = r.kind == Row.Kind.SONG && r.song != null;
             boolean isFolderRow = r.kind == Row.Kind.FOLDER;
+            boolean isUnclassifiedFolder = isFolderRow && ROOT_LABEL.equals(r.key);
+            boolean isSceneRow = r.kind == Row.Kind.SCENE && r.key != null;
 
             if (isSongRow && inSelectionMode) {
                 h.more.setVisibility(View.GONE);
@@ -307,7 +350,7 @@ public class MainActivity extends AppCompatActivity {
                 boolean selected = r.key != null && selectedKeys.contains(r.key);
                 h.check.setImageResource(selected
                         ? R.drawable.ic_check_on : R.drawable.ic_check_off);
-            } else if (isSongRow || isFolderRow) {
+            } else if (isSongRow || (isFolderRow && !isUnclassifiedFolder) || isSceneRow) {
                 h.check.setVisibility(View.GONE);
                 h.more.setVisibility(View.VISIBLE);
                 final VH vh = h;
@@ -353,6 +396,7 @@ public class MainActivity extends AppCompatActivity {
             final ImageView chevron;
             final ImageView more;
             final ImageView check;
+            final EqualizerView equalizer;
 
             VH(View v) {
                 super(v);
@@ -362,6 +406,7 @@ public class MainActivity extends AppCompatActivity {
                 chevron = v.findViewById(R.id.rowChevron);
                 more = v.findViewById(R.id.rowMore);
                 check = v.findViewById(R.id.rowCheck);
+                equalizer = v.findViewById(R.id.rowEqualizer);
             }
         }
     }
@@ -437,7 +482,9 @@ public class MainActivity extends AppCompatActivity {
             if (r.kind == Row.Kind.SONG && r.song != null) {
                 showSongOptions(r.song);
             } else if (r.kind == Row.Kind.FOLDER && r.key != null) {
-                confirmDeleteFolder(r.key);
+                showFolderOptions(r.key);
+            } else if (r.kind == Row.Kind.SCENE && r.key != null) {
+                showSceneOptions(r.key);
             }
         });
         listView.setLayoutManager(new LinearLayoutManager(this));
@@ -458,12 +505,12 @@ public class MainActivity extends AppCompatActivity {
                         List<Song> list = folders.get(currentFolder);
                         if (list != null && !list.isEmpty()) {
                             int idx = list.indexOf(r.song);
-                            if (idx >= 0) play(list, idx, currentFolder);
+                            if (idx >= 0) play(list, idx, currentFolder, Row.Kind.FOLDER);
                         }
                     } else if (mode == Mode.SCENE_SONGS) {
                         List<Song> list = songsForScene(currentScene);
                         int idx = list.indexOf(r.song);
-                        if (idx >= 0) play(list, idx, currentScene);
+                        if (idx >= 0) play(list, idx, currentScene, Row.Kind.SCENE);
                     }
                     break;
                 }
@@ -472,13 +519,8 @@ public class MainActivity extends AppCompatActivity {
         });
 
         adapter.setOnRowLongClickListener((r, position) -> {
-            if (r == null) return false;
-            if (r.kind == Row.Kind.SCENE && !AiClassifier.BUILTIN_SCENES.contains(r.key)) {
-                promptDeleteScene(r.key);
-                return true;
-            }
-            // SONG rows: long-press in SONGS mode = drag (ItemTouchHelper handles it);
-            // in other modes do nothing (use ⋯ for actions).
+            // SONG rows in SONGS / SCENE_SONGS mode = drag (ItemTouchHelper handles it).
+            // Folders / scenes use ⋯ for actions.
             return false;
         });
 
@@ -506,7 +548,8 @@ public class MainActivity extends AppCompatActivity {
                     exitSelectionMode();
                     return;
                 }
-                if (lyricsOverlay.getVisibility() == View.VISIBLE) {
+                if (lyricsOverlay != null
+                        && lyricsOverlay.getVisibility() == View.VISIBLE) {
                     hideLyrics();
                     return;
                 }
@@ -588,6 +631,70 @@ public class MainActivity extends AppCompatActivity {
         }
         showFolders();
         maybeStartClassifyScan();
+        restoreResumeState();
+    }
+
+    private static final String KEY_RESUME_PATH = "resume_path";
+    private static final String KEY_RESUME_POS_MS = "resume_position_ms";
+    private static final String KEY_RESUME_SRC_LABEL = "resume_source_label";
+    private static final String KEY_RESUME_SRC_KIND = "resume_source_kind";
+
+    private void saveResumeState() {
+        SharedPreferences.Editor e = Providers.prefs(this).edit();
+        Song s = currentSongOrNull();
+        if (s == null) {
+            e.remove(KEY_RESUME_PATH)
+                    .remove(KEY_RESUME_POS_MS)
+                    .remove(KEY_RESUME_SRC_LABEL)
+                    .remove(KEY_RESUME_SRC_KIND)
+                    .apply();
+            return;
+        }
+        int pos = 0;
+        if (player != null && isPrepared) {
+            try { pos = player.getCurrentPosition(); }
+            catch (IllegalStateException ignored) {}
+        }
+        e.putString(KEY_RESUME_PATH, s.path)
+                .putInt(KEY_RESUME_POS_MS, pos)
+                .putString(KEY_RESUME_SRC_LABEL,
+                        playSourceLabel == null ? "" : playSourceLabel)
+                .putString(KEY_RESUME_SRC_KIND,
+                        playSourceKind == null ? "" : playSourceKind.name())
+                .apply();
+    }
+
+    private void restoreResumeState() {
+        if (playingIndex >= 0) return;
+        SharedPreferences sp = Providers.prefs(this);
+        String path = sp.getString(KEY_RESUME_PATH, null);
+        if (path == null || path.isEmpty()) return;
+        Song song = songByPath.get(path);
+        if (song == null) return;
+
+        int seekMs = sp.getInt(KEY_RESUME_POS_MS, 0);
+        String label = sp.getString(KEY_RESUME_SRC_LABEL, "");
+        String kindStr = sp.getString(KEY_RESUME_SRC_KIND, "");
+        Row.Kind kind = null;
+        if (!kindStr.isEmpty()) {
+            try { kind = Row.Kind.valueOf(kindStr); }
+            catch (IllegalArgumentException ignored) {}
+        }
+
+        List<Song> queue = null;
+        if (kind == Row.Kind.FOLDER && folders.containsKey(label)) {
+            queue = folders.get(label);
+        } else if (kind == Row.Kind.SCENE && allSceneKeys().contains(label)) {
+            queue = songsForScene(label);
+        }
+        if (queue == null || queue.isEmpty() || !queue.contains(song)) {
+            queue = new ArrayList<>();
+            queue.add(song);
+            label = song.folder;
+            kind = Row.Kind.FOLDER;
+        }
+        int idx = queue.indexOf(song);
+        play(queue, idx, label, kind, seekMs, false);
     }
 
     private int migrateClassCacheToSidecars() {
@@ -723,9 +830,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private List<String> allSceneKeys() {
-        List<String> all = new ArrayList<>(AiClassifier.BUILTIN_SCENES);
-        all.addAll(customScenes);
+        List<String> all = new ArrayList<>();
+        for (String s : AiClassifier.BUILTIN_SCENES) {
+            if (!deletedBuiltins.contains(s)) all.add(s);
+        }
+        for (String s : customScenes) {
+            if (!all.contains(s)) all.add(s);
+        }
         return all;
+    }
+
+    private boolean isBuiltinScene(String name) {
+        return AiClassifier.BUILTIN_SCENES.contains(name)
+                && !deletedBuiltins.contains(name);
     }
 
     private void loadCustomScenes() {
@@ -736,10 +853,19 @@ public class MainActivity extends AppCompatActivity {
             org.json.JSONArray arr = new org.json.JSONArray(json);
             for (int i = 0; i < arr.length(); i++) {
                 String name = arr.optString(i, "").trim();
-                if (!name.isEmpty() && !AiClassifier.BUILTIN_SCENES.contains(name)
-                        && !customScenes.contains(name)) {
+                if (!name.isEmpty() && !customScenes.contains(name)) {
                     customScenes.add(name);
                 }
+            }
+        } catch (Exception ignored) {
+        }
+        deletedBuiltins.clear();
+        String delJson = sp.getString(KEY_DELETED_BUILTINS, "[]");
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(delJson);
+            for (int i = 0; i < arr.length(); i++) {
+                String name = arr.optString(i, "").trim();
+                if (!name.isEmpty()) deletedBuiltins.add(name);
             }
         } catch (Exception ignored) {
         }
@@ -747,8 +873,10 @@ public class MainActivity extends AppCompatActivity {
 
     private void saveCustomScenes() {
         org.json.JSONArray arr = new org.json.JSONArray(customScenes);
+        org.json.JSONArray del = new org.json.JSONArray(deletedBuiltins);
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                 .putString(KEY_CUSTOM_SCENES, arr.toString())
+                .putString(KEY_DELETED_BUILTINS, del.toString())
                 .apply();
     }
 
@@ -811,11 +939,16 @@ public class MainActivity extends AppCompatActivity {
         for (String key : allSceneKeys()) {
             int count = countSongsInScene(key);
             adapter.add(new Row(Row.Kind.SCENE, key, null,
-                    String.valueOf(count), true, count > 0, key, null));
+                    String.valueOf(count), false, count > 0, key, null));
         }
         adapter.add(new Row(Row.Kind.ADD_SCENE, "添加场景", null,
                 null, false, false, null, null));
+        List<String> orderedFolders = new ArrayList<>(folderNames.size());
         for (String name : folderNames) {
+            if (!ROOT_LABEL.equals(name)) orderedFolders.add(name);
+        }
+        if (folderNames.contains(ROOT_LABEL)) orderedFolders.add(ROOT_LABEL);
+        for (String name : orderedFolders) {
             int count = folders.get(name).size();
             adapter.add(new Row(Row.Kind.FOLDER, name, null,
                     String.valueOf(count), true, false, name, null));
@@ -829,7 +962,8 @@ public class MainActivity extends AppCompatActivity {
     private void updateSectionMeta() {
         StringBuilder sb = new StringBuilder();
         if (mode == Mode.FOLDERS) {
-            sb.append(folderNames.size()).append(" 分类  ·  ")
+            sb.append(allSceneKeys().size()).append(" 个场景  ·  ")
+                    .append(folderNames.size()).append(" 个文件夹  ·  ")
                     .append(totalSongs).append(" 首");
             if (scanning) sb.append("    ●  AI 分类中 ")
                     .append(scanDone).append("/").append(scanTotal);
@@ -953,10 +1087,10 @@ public class MainActivity extends AppCompatActivity {
     private void playAll() {
         if (mode == Mode.SONGS && currentFolder != null) {
             List<Song> list = folders.get(currentFolder);
-            if (list != null && !list.isEmpty()) play(list, 0, currentFolder);
+            if (list != null && !list.isEmpty()) play(list, 0, currentFolder, Row.Kind.FOLDER);
         } else if (mode == Mode.SCENE_SONGS && currentScene != null) {
             List<Song> list = songsForScene(currentScene);
-            if (!list.isEmpty()) play(list, 0, currentScene);
+            if (!list.isEmpty()) play(list, 0, currentScene, Row.Kind.SCENE);
         }
     }
 
@@ -1007,16 +1141,27 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void play(List<Song> queue, int position, String label) {
+        play(queue, position, label, playSourceKind);
+    }
+
+    private void play(List<Song> queue, int position, String label, Row.Kind sourceKind) {
+        play(queue, position, label, sourceKind, 0, true);
+    }
+
+    private void play(List<Song> queue, int position, String label,
+                      Row.Kind sourceKind, int seekMs, boolean autoStart) {
         if (queue == null || queue.isEmpty() || position < 0 || position >= queue.size()) {
             stopPlayer();
             nowPlaying.setText("未播放");
             nowMeta.setText("");
             playingIndex = -1;
             playSourceLabel = null;
+            playSourceKind = null;
             playQueue = Collections.emptyList();
             clearLyrics();
             updatePlayButton();
             adapter.setPlayingPath(null);
+            adapter.setPlayingSource(null, null);
             progressBar.setProgress(0);
             timeCurrent.setText("--:--");
             timeTotal.setText("--:--");
@@ -1025,6 +1170,7 @@ public class MainActivity extends AppCompatActivity {
 
         playQueue = queue;
         playSourceLabel = label;
+        playSourceKind = sourceKind;
         playingIndex = position;
         Song song = queue.get(position);
         nowPlaying.setText(song.name);
@@ -1033,6 +1179,7 @@ public class MainActivity extends AppCompatActivity {
         timeCurrent.setText("00:00");
         timeTotal.setText("--:--");
         adapter.setPlayingPath(song.path);
+        adapter.setPlayingSource(sourceKind, label);
 
         if (mode == Mode.SONGS && song.folder.equals(currentFolder)) {
             listView.smoothScrollToPosition(position);
@@ -1061,13 +1208,25 @@ public class MainActivity extends AppCompatActivity {
             });
             player.setOnPreparedListener(mp -> {
                 isPrepared = true;
+                int d = 0;
                 try {
-                    int d = mp.getDuration();
+                    d = mp.getDuration();
                     timeTotal.setText(d > 0 ? formatMs(d) : "--:--");
                 } catch (IllegalStateException ignored) {}
-                mp.start();
+                if (seekMs > 0 && (d <= 0 || seekMs < d)) {
+                    try {
+                        mp.seekTo(seekMs);
+                        timeCurrent.setText(formatMs(seekMs));
+                        if (d > 0) {
+                            progressBar.setProgress((int) (((long) seekMs * 1000L) / d));
+                        }
+                    } catch (IllegalStateException ignored) {}
+                }
+                if (autoStart) {
+                    mp.start();
+                    startTicking();
+                }
                 updatePlayButton();
-                startTicking();
             });
             player.prepareAsync();
         } catch (IOException e) {
@@ -1419,13 +1578,13 @@ public class MainActivity extends AppCompatActivity {
     private void startFromDefault() {
         if (mode == Mode.SONGS && currentFolder != null) {
             List<Song> list = folders.get(currentFolder);
-            if (list != null && !list.isEmpty()) play(list, 0, currentFolder);
+            if (list != null && !list.isEmpty()) play(list, 0, currentFolder, Row.Kind.FOLDER);
         } else if (mode == Mode.SCENE_SONGS && currentScene != null) {
             List<Song> list = songsForScene(currentScene);
-            if (!list.isEmpty()) play(list, 0, currentScene);
+            if (!list.isEmpty()) play(list, 0, currentScene, Row.Kind.SCENE);
         } else if (!folderNames.isEmpty()) {
             String f = folderNames.get(0);
-            play(folders.get(f), 0, f);
+            play(folders.get(f), 0, f, Row.Kind.FOLDER);
         }
     }
 
@@ -1475,6 +1634,7 @@ public class MainActivity extends AppCompatActivity {
             playing = player != null && isPrepared && player.isPlaying();
         } catch (IllegalStateException ignored) {}
         btnPlay.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
+        if (adapter != null) adapter.setPlayingActive(playing);
     }
 
     private void stopPlayer() {
@@ -1516,13 +1676,26 @@ public class MainActivity extends AppCompatActivity {
 
     private void runNextBatch(final ClassifierPool pool,
                               final List<AiClassifier.Item> all, final int from) {
+        runNextBatch(pool, all, from, false);
+    }
+
+    private void runNextBatch(final ClassifierPool pool,
+                              final List<AiClassifier.Item> all, final int from,
+                              final boolean mergeMode) {
         if (pool == null) {
             scanning = false;
+            mergeStopScene = null;
+            mergeStopTarget = 0;
             updateSectionMeta();
             return;
         }
         if (from >= all.size()) {
             scanning = false;
+            mergeStopScene = null;
+            mergeStopTarget = 0;
+            for (String scene : allSceneKeys()) {
+                applySceneLimit(scene);
+            }
             updateSectionMeta();
             refreshCurrentView();
             Toast.makeText(this, "AI 分类完成", Toast.LENGTH_SHORT).show();
@@ -1533,17 +1706,128 @@ public class MainActivity extends AppCompatActivity {
         pool.classifyBatch(batch, (results, error) -> {
             if (error != null) {
                 scanning = false;
+                mergeStopScene = null;
+                mergeStopTarget = 0;
                 updateSectionMeta();
                 Toast.makeText(this, "AI 失败：" + error, Toast.LENGTH_LONG).show();
                 return;
             }
-            classCache.putBatch(results);
-            writeClassificationToSidecars(results);
+            if (mergeMode) {
+                mergeClassificationIntoCache(results);
+                mergeClassificationIntoSidecars(results);
+            } else {
+                classCache.putBatch(results);
+                writeClassificationToSidecars(results);
+            }
             scanDone = to;
             updateSectionMeta();
             refreshCurrentView();
-            runNextBatch(pool, all, to);
+
+            if (mergeMode && mergeStopScene != null && mergeStopTarget > 0) {
+                int tagged = 0;
+                for (Song s : songByPath.values()) {
+                    if (scenesForSong(s).contains(mergeStopScene)) tagged++;
+                    if (tagged >= mergeStopTarget) break;
+                }
+                if (tagged >= mergeStopTarget) {
+                    String finishedScene = mergeStopScene;
+                    int finishedTarget = mergeStopTarget;
+                    scanning = false;
+                    mergeStopScene = null;
+                    mergeStopTarget = 0;
+                    for (String scene : allSceneKeys()) {
+                        applySceneLimit(scene);
+                    }
+                    updateSectionMeta();
+                    refreshCurrentView();
+                    Toast.makeText(this, "「" + finishedScene + "」已选满 "
+                            + finishedTarget + " 首", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+            }
+
+            runNextBatch(pool, all, to, mergeMode);
         });
+    }
+
+    private void classifyForNewScene(String newScene) {
+        classifierPool = null;
+        refreshCurrentView();
+
+        ClassifierPool pool = Providers.buildPool(this,
+                Collections.singletonList(newScene));
+        if (pool.isEmpty()) {
+            Toast.makeText(this, "已添加场景「" + newScene
+                    + "」，配置 AI 后会自动分类", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        LinkedHashMap<String, AiClassifier.Item> unique = new LinkedHashMap<>();
+        for (Song s : songByPath.values()) {
+            if (!isClassified(s)) continue;
+            if (scenesForSong(s).contains(newScene)) continue;
+            String[] ta = LyricsFetcher.extractTitleArtist(s.name, s.folder);
+            String qk = LyricsFetcher.queryKey(ta[0], ta[1]);
+            if (unique.containsKey(qk)) continue;
+            unique.put(qk, new AiClassifier.Item(qk, ta[0], ta[1]));
+        }
+
+        if (unique.isEmpty()) {
+            Toast.makeText(this, "已添加场景「" + newScene + "」",
+                    Toast.LENGTH_SHORT).show();
+            maybeStartClassifyScan();
+            return;
+        }
+
+        if (scanning) {
+            Toast.makeText(this, "已添加场景，当前扫描完成后会自动判断",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        int target = Providers.getSceneCount(Providers.prefs(this), newScene);
+        Toast.makeText(this, "判断哪些歌适合「" + newScene + "」",
+                Toast.LENGTH_SHORT).show();
+        scanning = true;
+        scanDone = 0;
+        scanTotal = unique.size();
+        mergeStopScene = newScene;
+        mergeStopTarget = target;
+        updateSectionMeta();
+        runNextBatch(pool, new ArrayList<>(unique.values()), 0, true);
+    }
+
+    private void mergeClassificationIntoCache(Map<String, Set<String>> results) {
+        for (Map.Entry<String, Set<String>> e : results.entrySet()) {
+            Set<String> incoming = e.getValue();
+            if (incoming == null || incoming.isEmpty()) continue;
+            Set<String> existing = classCache.get(e.getKey());
+            Set<String> merged = existing == null
+                    ? new HashSet<>() : new HashSet<>(existing);
+            merged.addAll(incoming);
+            classCache.put(e.getKey(), merged);
+        }
+    }
+
+    private void mergeClassificationIntoSidecars(Map<String, Set<String>> results) {
+        if (!hasAllFilesAccess()) return;
+        for (Song s : songByPath.values()) {
+            String qk = queryKeyForSong(s);
+            if (!results.containsKey(qk)) continue;
+            Set<String> additions = results.get(qk);
+            if (additions == null || additions.isEmpty()) continue;
+            File sf = Sidecar.sidecarFor(s.path);
+            if (sf == null) continue;
+            Sidecar.Data d = sidecarByPath.get(s.path);
+            if (d == null) d = Sidecar.read(sf);
+            if (d.scenes == null) d.scenes = new LinkedHashSet<>();
+            int before = d.scenes.size();
+            d.scenes.addAll(additions);
+            if (d.scenes.size() == before && d.classified) continue;
+            d.classified = true;
+            Sidecar.write(sf, d);
+            sidecarByPath.put(s.path, d);
+        }
     }
 
     private void promptAddScene() {
@@ -1556,15 +1840,45 @@ public class MainActivity extends AppCompatActivity {
         input.setTextColor(Color.parseColor("#FFF2F0EC"));
         input.setHintTextColor(Color.parseColor("#FF6B6B6B"));
 
+        TextView countLabel = new TextView(this);
+        countLabel.setText("歌曲数量");
+        countLabel.setTextColor(Color.parseColor("#FFF2F0EC"));
+        countLabel.setTextSize(14);
+
+        TextView countHelp = new TextView(this);
+        countHelp.setText("AI 从适合的歌里只挑这么多首打上标签；"
+                + "调到「不限」就把所有匹配的歌都收进来。");
+        countHelp.setTextColor(Color.parseColor("#FF8B847B"));
+        countHelp.setTextSize(12);
+
+        NumberPicker countPicker = buildSceneCountPicker(10);
+
         LinearLayout wrap = new LinearLayout(this);
         wrap.setOrientation(LinearLayout.VERTICAL);
         wrap.setPadding(pad, 8 * dp, pad, 0);
+
         wrap.addView(input, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        LinearLayout.LayoutParams labelLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        labelLp.topMargin = 16 * dp;
+        wrap.addView(countLabel, labelLp);
+
+        LinearLayout.LayoutParams helpLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        helpLp.topMargin = 4 * dp;
+        wrap.addView(countHelp, helpLp);
+
+        LinearLayout.LayoutParams pickerLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        pickerLp.topMargin = 4 * dp;
+        pickerLp.gravity = Gravity.CENTER_HORIZONTAL;
+        wrap.addView(countPicker, pickerLp);
+
         new AlertDialog.Builder(this)
                 .setTitle("添加场景")
-                .setMessage("AI 会根据歌名/歌手判断每首歌是否适合。\n添加后会重新分类所有歌曲。")
+                .setMessage("AI 会根据歌名/歌手判断每首歌是否适合。")
                 .setView(wrap)
                 .setPositiveButton("添加", (d, w) -> {
                     String name = input.getText().toString().trim();
@@ -1582,25 +1896,38 @@ public class MainActivity extends AppCompatActivity {
                         Toast.makeText(this, "已存在同名场景", Toast.LENGTH_SHORT).show();
                         return;
                     }
+                    int count = countPicker.getValue();
                     customScenes.add(name);
                     saveCustomScenes();
-                    invalidateClassificationsAndRescan();
+                    Providers.setSceneCount(Providers.prefs(this), name, count);
+                    classifyForNewScene(name);
                 })
                 .setNegativeButton("取消", null)
                 .show();
     }
 
     private void promptDeleteScene(String name) {
+        String msg = isBuiltinScene(name)
+                ? "从所有歌曲中移除这个标签，不会重新调 AI。\n之后可以在"
+                    + "「添加场景」里以同名重新加回。"
+                : "从所有歌曲中移除这个标签，不会重新调 AI。";
         new AlertDialog.Builder(this)
                 .setTitle("删除场景「" + name + "」")
-                .setMessage("从所有歌曲中移除这个标签，不会重新调 AI。")
-                .setPositiveButton("删除", (d, w) -> deleteCustomScene(name))
+                .setMessage(msg)
+                .setPositiveButton("删除", (d, w) -> deleteScene(name))
                 .setNegativeButton("取消", null)
                 .show();
     }
 
-    private void deleteCustomScene(String name) {
-        if (!customScenes.remove(name)) return;
+    private void deleteScene(String name) {
+        boolean wasBuiltin = AiClassifier.BUILTIN_SCENES.contains(name)
+                && !deletedBuiltins.contains(name);
+        boolean wasCustom = customScenes.remove(name);
+        if (wasBuiltin) {
+            deletedBuiltins.add(name);
+        } else if (!wasCustom) {
+            return;
+        }
         saveCustomScenes();
         if (hasAllFilesAccess()) {
             for (Song s : songByPath.values()) {
@@ -1611,6 +1938,11 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         }
+        SharedPreferences sp = Providers.prefs(this);
+        sp.edit()
+                .remove(Providers.KEY_SCENE_COUNT_PREFIX + name)
+                .remove(Providers.KEY_SCENE_EVICTED_PREFIX + name)
+                .apply();
         classifierPool = null;
         if (mode == Mode.SCENE_SONGS && name.equals(currentScene)) {
             showFolders();
@@ -1621,30 +1953,34 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void invalidateClassificationsAndRescan() {
-        classCache.clear();
-        if (hasAllFilesAccess()) {
-            for (Song s : songByPath.values()) {
-                Sidecar.Data d = sidecarByPath.get(s.path);
-                if (d != null && d.classified) {
-                    d.classified = false;
-                    d.scenes.clear();
-                    File sf = Sidecar.sidecarFor(s.path);
-                    Sidecar.write(sf, d);
-                }
-            }
-        } else {
-            for (Song s : songByPath.values()) {
-                Sidecar.Data d = sidecarByPath.get(s.path);
-                if (d != null) {
-                    d.classified = false;
-                    d.scenes.clear();
-                }
+        List<String> pathsToRewrite = new ArrayList<>();
+        Set<String> keepQueryKeys = new HashSet<>();
+        for (Song s : songByPath.values()) {
+            Sidecar.Data d = sidecarByPath.get(s.path);
+            if (d != null && d.classified && !d.manualOverride) {
+                d.classified = false;
+                d.scenes.clear();
+                pathsToRewrite.add(s.path);
+            } else if (d != null && d.manualOverride) {
+                keepQueryKeys.add(queryKeyForSong(s));
             }
         }
+        classCache.retainOnly(keepQueryKeys);
         classifierPool = null;
-        Toast.makeText(this, "已添加场景，开始重新分类", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "开始重新分类（已跳过手工修正的歌）", Toast.LENGTH_SHORT).show();
         refreshCurrentView();
         maybeStartClassifyScan();
+
+        if (hasAllFilesAccess() && !pathsToRewrite.isEmpty()) {
+            new Thread(() -> {
+                for (String path : pathsToRewrite) {
+                    Sidecar.Data d = sidecarByPath.get(path);
+                    if (d == null) continue;
+                    File sf = Sidecar.sidecarFor(path);
+                    if (sf != null) Sidecar.write(sf, d);
+                }
+            }, "sidecar-rewrite").start();
+        }
     }
 
     private void showSongOptions(Song song) {
@@ -1677,9 +2013,295 @@ public class MainActivity extends AppCompatActivity {
             sheet.dismiss();
             enterSelectionMode(song);
         });
+        content.findViewById(R.id.actionMove).setOnClickListener(v -> {
+            sheet.dismiss();
+            promptMoveOrCopy(song, true);
+        });
+        content.findViewById(R.id.actionCopy).setOnClickListener(v -> {
+            sheet.dismiss();
+            promptMoveOrCopy(song, false);
+        });
         content.findViewById(R.id.actionDelete).setOnClickListener(v -> {
             sheet.dismiss();
             confirmDeleteSingle(song);
+        });
+
+        sheet.setContentView(content);
+        View parent = (View) content.getParent();
+        parent.setBackgroundColor(Color.TRANSPARENT);
+        parent.setElevation(0f);
+        parent.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+        BottomSheetBehavior<View> behavior = BottomSheetBehavior.from(parent);
+        behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+        behavior.setSkipCollapsed(true);
+        if (sheet.getWindow() != null) {
+            sheet.getWindow().setDimAmount(0f);
+            sheet.getWindow().setBackgroundDrawable(null);
+            sheet.getWindow().clearFlags(
+                    android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        sheet.show();
+    }
+
+    private void showFolderOptions(String folderName) {
+        List<Song> inFolder = folders.get(folderName);
+        int count = inFolder == null ? 0 : inFolder.size();
+        showRenameDeleteSheet(folderName, count + " 首歌  ·  文件夹",
+                () -> promptRenameFolder(folderName),
+                () -> confirmDeleteFolder(folderName));
+    }
+
+    private void showSceneOptions(String sceneKey) {
+        BottomSheetDialog sheet = new BottomSheetDialog(this);
+        View content = getLayoutInflater().inflate(R.layout.dialog_scene_actions, null);
+
+        int count = countSongsInScene(sceneKey);
+        String tag = isBuiltinScene(sceneKey) ? "内置场景" : "自定义场景";
+        ((TextView) content.findViewById(R.id.sheetTitle)).setText(sceneKey);
+        ((TextView) content.findViewById(R.id.sheetSubtitle))
+                .setText(count + " 首歌  ·  " + tag);
+
+        int target = Providers.getSceneCount(Providers.prefs(this), sceneKey);
+        TextView countValue = content.findViewById(R.id.countValue);
+        countValue.setText(target <= 0 ? "不限" : String.valueOf(target));
+
+        content.findViewById(R.id.actionRename).setOnClickListener(v -> {
+            sheet.dismiss();
+            promptRenameScene(sceneKey);
+        });
+        content.findViewById(R.id.actionCount).setOnClickListener(v -> {
+            sheet.dismiss();
+            promptSceneCount(sceneKey);
+        });
+        content.findViewById(R.id.actionSwap).setOnClickListener(v -> {
+            sheet.dismiss();
+            swapScene(sceneKey);
+        });
+        content.findViewById(R.id.actionDelete).setOnClickListener(v -> {
+            sheet.dismiss();
+            promptDeleteScene(sceneKey);
+        });
+
+        sheet.setContentView(content);
+        View parent = (View) content.getParent();
+        parent.setBackgroundColor(Color.TRANSPARENT);
+        parent.setElevation(0f);
+        parent.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+        BottomSheetBehavior<View> behavior = BottomSheetBehavior.from(parent);
+        behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+        behavior.setSkipCollapsed(true);
+        if (sheet.getWindow() != null) {
+            sheet.getWindow().setDimAmount(0f);
+            sheet.getWindow().setBackgroundDrawable(null);
+            sheet.getWindow().clearFlags(
+                    android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        sheet.show();
+    }
+
+    private void promptSceneCount(String scene) {
+        SharedPreferences sp = Providers.prefs(this);
+        int current = Providers.getSceneCount(sp, scene);
+        int dp = (int) getResources().getDisplayMetrics().density;
+
+        TextView help = new TextView(this);
+        help.setText("AI 从适合的歌里只挑这么多首打上标签；"
+                + "调到「不限」就把所有匹配的歌都收进来。\n手工打的标签不受影响。");
+        help.setTextColor(Color.parseColor("#FF8B847B"));
+        help.setTextSize(12);
+
+        NumberPicker picker = buildSceneCountPicker(current);
+
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(16 * dp, 8 * dp, 16 * dp, 0);
+        wrap.addView(help, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams pickerLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        pickerLp.topMargin = 8 * dp;
+        pickerLp.gravity = Gravity.CENTER_HORIZONTAL;
+        wrap.addView(picker, pickerLp);
+
+        new AlertDialog.Builder(this)
+                .setTitle("「" + scene + "」歌曲数量")
+                .setView(wrap)
+                .setPositiveButton("保存", (d, w) -> {
+                    int n = picker.getValue();
+                    Providers.setSceneCount(sp, scene, n);
+                    applySceneLimit(scene);
+                    refreshCurrentView();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private static final int SCENE_COUNT_MAX = 100;
+
+    private NumberPicker buildSceneCountPicker(int initial) {
+        NumberPicker np = new NumberPicker(this);
+        String[] labels = new String[SCENE_COUNT_MAX + 1];
+        labels[0] = "不限";
+        for (int i = 1; i <= SCENE_COUNT_MAX; i++) labels[i] = String.valueOf(i);
+        np.setMinValue(0);
+        np.setMaxValue(SCENE_COUNT_MAX);
+        np.setDisplayedValues(labels);
+        np.setWrapSelectorWheel(false);
+        int clamped = Math.max(0, Math.min(SCENE_COUNT_MAX, initial));
+        np.setValue(clamped);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            np.setTextColor(Color.parseColor("#FFF2F0EC"));
+        }
+        return np;
+    }
+
+    private void applySceneLimit(String scene) {
+        SharedPreferences sp = Providers.prefs(this);
+        int target = Providers.getSceneCount(sp, scene);
+        if (target <= 0) return;
+
+        Set<String> evicted = Providers.getSceneEvicted(sp, scene);
+
+        List<Song> tagged = new ArrayList<>();
+        List<Song> taggedNonManual = new ArrayList<>();
+        for (Song s : songByPath.values()) {
+            if (!scenesForSong(s).contains(scene)) continue;
+            tagged.add(s);
+            Sidecar.Data d = sidecarByPath.get(s.path);
+            if (d == null || !d.manualOverride) taggedNonManual.add(s);
+        }
+
+        if (tagged.size() > target) {
+            int over = tagged.size() - target;
+            int removable = Math.min(over, taggedNonManual.size());
+            if (removable > 0) {
+                Collections.shuffle(taggedNonManual, random);
+                for (int i = 0; i < removable; i++) {
+                    untagSceneFromSong(taggedNonManual.get(i), scene);
+                }
+            }
+            return;
+        }
+
+        if (tagged.size() < target) {
+            int need = target - tagged.size();
+            List<Song> candidates = new ArrayList<>();
+            for (Song s : songByPath.values()) {
+                if (scenesForSong(s).contains(scene)) continue;
+                String qk = queryKeyForSong(s);
+                if (evicted.contains(qk)) continue;
+                Set<String> aiVerdict = classCache.get(qk);
+                if (aiVerdict != null && aiVerdict.contains(scene)) {
+                    candidates.add(s);
+                }
+            }
+            Collections.shuffle(candidates, random);
+            int add = Math.min(need, candidates.size());
+            for (int i = 0; i < add; i++) {
+                tagSceneOnSong(candidates.get(i), scene);
+            }
+        }
+    }
+
+    private void tagSceneOnSong(Song s, String scene) {
+        Sidecar.Data d = sidecarByPath.get(s.path);
+        if (d == null) d = new Sidecar.Data();
+        if (d.scenes == null) d.scenes = new LinkedHashSet<>();
+        if (!d.scenes.add(scene)) return;
+        d.classified = true;
+        sidecarByPath.put(s.path, d);
+        if (hasAllFilesAccess()) {
+            File sf = Sidecar.sidecarFor(s.path);
+            if (sf != null) Sidecar.write(sf, d);
+        }
+    }
+
+    private void untagSceneFromSong(Song s, String scene) {
+        Sidecar.Data d = sidecarByPath.get(s.path);
+        if (d == null || d.scenes == null) return;
+        if (!d.scenes.remove(scene)) return;
+        if (hasAllFilesAccess()) {
+            File sf = Sidecar.sidecarFor(s.path);
+            if (sf != null) Sidecar.write(sf, d);
+        }
+    }
+
+    private void swapScene(String scene) {
+        SharedPreferences sp = Providers.prefs(this);
+        int target = Providers.getSceneCount(sp, scene);
+        if (target <= 0) {
+            Toast.makeText(this, "请先设置「歌曲数量」", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        List<Song> evictable = new ArrayList<>();
+        for (Song s : songByPath.values()) {
+            if (!scenesForSong(s).contains(scene)) continue;
+            Sidecar.Data d = sidecarByPath.get(s.path);
+            if (d != null && d.manualOverride) continue;
+            evictable.add(s);
+        }
+        if (evictable.isEmpty()) {
+            Toast.makeText(this, "没有可更换的曲目", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Set<String> existingEvicted = Providers.getSceneEvicted(sp, scene);
+        Set<String> evictingNow = new HashSet<>();
+        for (Song s : evictable) evictingNow.add(queryKeyForSong(s));
+
+        int candidateCount = 0;
+        for (Song s : songByPath.values()) {
+            if (scenesForSong(s).contains(scene)) continue;
+            String qk = queryKeyForSong(s);
+            if (evictingNow.contains(qk)) continue;
+            if (existingEvicted.contains(qk)) continue;
+            Set<String> v = classCache.get(qk);
+            if (v != null && v.contains(scene)) candidateCount++;
+        }
+
+        if (candidateCount < evictable.size()) {
+            Providers.clearSceneEvicted(sp, scene);
+            existingEvicted = new HashSet<>();
+        }
+        existingEvicted.addAll(evictingNow);
+        Providers.setSceneEvicted(sp, scene, existingEvicted);
+
+        for (Song s : evictable) untagSceneFromSong(s, scene);
+        applySceneLimit(scene);
+
+        if (mode == Mode.SCENE_SONGS && scene.equals(currentScene)) {
+            openScene(scene);
+        } else {
+            refreshCurrentView();
+        }
+        Toast.makeText(this, "已更换", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showRenameDeleteSheet(String title, String subtitle,
+                                       Runnable onRename, Runnable onDelete) {
+        BottomSheetDialog sheet = new BottomSheetDialog(this);
+        View content = getLayoutInflater().inflate(R.layout.dialog_song_actions, null);
+
+        ((TextView) content.findViewById(R.id.sheetTitle)).setText(title);
+        ((TextView) content.findViewById(R.id.sheetSubtitle)).setText(subtitle);
+
+        content.findViewById(R.id.sceneTagsLabel).setVisibility(View.GONE);
+        content.findViewById(R.id.sceneTagsContainer).setVisibility(View.GONE);
+        content.findViewById(R.id.sceneTagsDivider).setVisibility(View.GONE);
+        content.findViewById(R.id.actionSelect).setVisibility(View.GONE);
+        content.findViewById(R.id.actionMove).setVisibility(View.GONE);
+        content.findViewById(R.id.actionCopy).setVisibility(View.GONE);
+
+        content.findViewById(R.id.actionRename).setOnClickListener(v -> {
+            sheet.dismiss();
+            onRename.run();
+        });
+        content.findViewById(R.id.actionDelete).setOnClickListener(v -> {
+            sheet.dismiss();
+            onDelete.run();
         });
 
         sheet.setContentView(content);
@@ -1778,6 +2400,7 @@ public class MainActivity extends AppCompatActivity {
                 if (d == null) d = Sidecar.read(sf);
                 d.scenes = new LinkedHashSet<>(tags);
                 d.classified = true;
+                d.manualOverride = true;
                 Sidecar.write(sf, d);
                 sidecarByPath.put(song.path, d);
             }
@@ -1786,6 +2409,7 @@ public class MainActivity extends AppCompatActivity {
             if (d == null) d = new Sidecar.Data();
             d.scenes = new LinkedHashSet<>(tags);
             d.classified = true;
+            d.manualOverride = true;
             sidecarByPath.put(song.path, d);
         }
         classCache.put(queryKeyForSong(song), tags);
@@ -1836,6 +2460,394 @@ public class MainActivity extends AppCompatActivity {
         if (name == null) return "";
         int dot = name.lastIndexOf('.');
         return dot < 0 ? "" : name.substring(dot + 1);
+    }
+
+    private void promptRenameFolder(String oldName) {
+        EditText input = textInput(oldName, "新文件夹名");
+        new AlertDialog.Builder(this)
+                .setTitle("重命名文件夹")
+                .setView(wrapInput(input))
+                .setPositiveButton("保存", (d, w) -> {
+                    String newName = input.getText().toString().trim();
+                    if (newName.isEmpty() || newName.equals(oldName)) return;
+                    if (newName.contains("/") || newName.contains("\\")) {
+                        Toast.makeText(this, "名称不能含 / \\", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (folders.containsKey(newName)) {
+                        Toast.makeText(this, "已存在同名文件夹", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    renameFolder(oldName, newName);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void renameFolder(String oldName, String newName) {
+        if (!hasAllFilesAccess()) {
+            Toast.makeText(this, "需要文件访问权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File from = new File(scanRoot(), oldName);
+        File to = new File(scanRoot(), newName);
+        if (!from.exists()) {
+            Toast.makeText(this, "文件夹已不存在", Toast.LENGTH_SHORT).show();
+            reloadAfterFsChange();
+            return;
+        }
+        if (to.exists()) {
+            Toast.makeText(this, "目标已存在", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        List<Song> songs = folders.get(oldName);
+        List<String> oldPaths = new ArrayList<>();
+        List<String> newPaths = new ArrayList<>();
+        if (songs != null) {
+            for (Song s : songs) {
+                oldPaths.add(s.path);
+                newPaths.add(s.path.replace(from.getAbsolutePath(), to.getAbsolutePath()));
+            }
+        }
+
+        Song current = currentSongOrNull();
+        if (current != null && oldName.equals(current.folder)) {
+            stopPlayer();
+            playingIndex = -1;
+            playQueue = Collections.emptyList();
+            clearLyrics();
+            nowPlaying.setText("未播放");
+            nowMeta.setText("");
+            playSourceLabel = null;
+            playSourceKind = null;
+            updatePlayButton();
+            adapter.setPlayingPath(null);
+            adapter.setPlayingSource(null, null);
+        }
+
+        if (!from.renameTo(to)) {
+            Toast.makeText(this, "重命名失败（可能是权限或跨卷）", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        SharedPreferences sp = Providers.prefs(this);
+        sp.edit().remove(Providers.KEY_FOLDER_ORDER_PREFIX + oldName).apply();
+
+        List<String> bothPaths = new ArrayList<>(oldPaths);
+        bothPaths.addAll(newPaths);
+        if (!bothPaths.isEmpty()) {
+            MediaScannerConnection.scanFile(this,
+                    bothPaths.toArray(new String[0]), null,
+                    (path, uri) -> runOnUiThread(this::reloadAfterFsChange));
+        } else {
+            reloadAfterFsChange();
+        }
+        Toast.makeText(this, "已重命名", Toast.LENGTH_SHORT).show();
+    }
+
+    private void promptRenameScene(String oldName) {
+        EditText input = textInput(oldName, "新场景名");
+        new AlertDialog.Builder(this)
+                .setTitle("重命名场景")
+                .setView(wrapInput(input))
+                .setPositiveButton("保存", (d, w) -> {
+                    String newName = input.getText().toString().trim();
+                    if (newName.isEmpty() || newName.equals(oldName)) return;
+                    if (newName.length() > 12) {
+                        Toast.makeText(this, "名称太长（限 12 字）", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (newName.contains(",") || newName.contains(";") || newName.contains("|")
+                            || newName.contains("[") || newName.contains("]")) {
+                        Toast.makeText(this, "名称不能含 , ; | [ ] 等符号",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (allSceneKeys().contains(newName)) {
+                        Toast.makeText(this, "已存在同名场景", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    renameScene(oldName, newName);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void renameScene(String oldName, String newName) {
+        boolean wasBuiltin = AiClassifier.BUILTIN_SCENES.contains(oldName)
+                && !deletedBuiltins.contains(oldName);
+        if (wasBuiltin) {
+            deletedBuiltins.add(oldName);
+            if (!customScenes.contains(newName)) customScenes.add(newName);
+        } else {
+            int idx = customScenes.indexOf(oldName);
+            if (idx >= 0) customScenes.set(idx, newName);
+        }
+        saveCustomScenes();
+
+        List<String> pathsToRewrite = new ArrayList<>();
+        for (Map.Entry<String, Sidecar.Data> e : sidecarByPath.entrySet()) {
+            Sidecar.Data d = e.getValue();
+            if (d != null && d.scenes != null && d.scenes.contains(oldName)) {
+                LinkedHashSet<String> updated = new LinkedHashSet<>();
+                for (String s : d.scenes) updated.add(s.equals(oldName) ? newName : s);
+                d.scenes = updated;
+                pathsToRewrite.add(e.getKey());
+            }
+        }
+        if (hasAllFilesAccess() && !pathsToRewrite.isEmpty()) {
+            for (String path : pathsToRewrite) {
+                Sidecar.Data d = sidecarByPath.get(path);
+                File sf = Sidecar.sidecarFor(path);
+                if (sf != null && d != null) Sidecar.write(sf, d);
+            }
+        }
+        classCache.renameTag(oldName, newName);
+
+        SharedPreferences sp = Providers.prefs(this);
+        List<String> oldOrder = Providers.getSceneOrder(sp, oldName);
+        if (!oldOrder.isEmpty()) {
+            Providers.setSceneOrder(sp, newName, oldOrder);
+            sp.edit().remove(Providers.KEY_SCENE_ORDER_PREFIX + oldName).apply();
+        }
+        int oldCount = Providers.getSceneCount(sp, oldName);
+        if (oldCount > 0) {
+            Providers.setSceneCount(sp, newName, oldCount);
+            sp.edit().remove(Providers.KEY_SCENE_COUNT_PREFIX + oldName).apply();
+        }
+        Set<String> oldEvicted = Providers.getSceneEvicted(sp, oldName);
+        if (!oldEvicted.isEmpty()) {
+            Providers.setSceneEvicted(sp, newName, oldEvicted);
+            Providers.clearSceneEvicted(sp, oldName);
+        }
+
+        if (mode == Mode.SCENE_SONGS && oldName.equals(currentScene)) {
+            currentScene = newName;
+            sectionTitle.setText(newName);
+        }
+        if (oldName.equals(playSourceLabel) && playSourceKind == Row.Kind.SCENE) {
+            playSourceLabel = newName;
+            nowMeta.setText(newName);
+            adapter.setPlayingSource(Row.Kind.SCENE, newName);
+        }
+        classifierPool = null;
+        Toast.makeText(this, "已重命名，正在按新名字重新判定", Toast.LENGTH_SHORT).show();
+        clearAndRescanScene(newName);
+    }
+
+    private void clearAndRescanScene(String scene) {
+        List<String> pathsToRewrite = new ArrayList<>();
+        for (Map.Entry<String, Sidecar.Data> e : sidecarByPath.entrySet()) {
+            Sidecar.Data d = e.getValue();
+            if (d == null || d.scenes == null) continue;
+            if (d.manualOverride) continue;
+            if (d.scenes.remove(scene)) {
+                pathsToRewrite.add(e.getKey());
+            }
+        }
+        classCache.removeTag(scene);
+        Providers.clearSceneEvicted(Providers.prefs(this), scene);
+
+        if (hasAllFilesAccess() && !pathsToRewrite.isEmpty()) {
+            new Thread(() -> {
+                for (String path : pathsToRewrite) {
+                    Sidecar.Data d = sidecarByPath.get(path);
+                    if (d == null) continue;
+                    File sf = Sidecar.sidecarFor(path);
+                    if (sf != null) Sidecar.write(sf, d);
+                }
+            }, "sidecar-rewrite").start();
+        }
+
+        refreshCurrentView();
+        classifyForNewScene(scene);
+    }
+
+    private EditText textInput(String initialText, String hint) {
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        if (initialText != null) {
+            input.setText(initialText);
+            input.setSelection(initialText.length());
+        }
+        input.setHint(hint);
+        input.setTextColor(Color.parseColor("#FFF2F0EC"));
+        input.setHintTextColor(Color.parseColor("#FF6B6B6B"));
+        return input;
+    }
+
+    private LinearLayout wrapInput(EditText input) {
+        int dp = (int) getResources().getDisplayMetrics().density;
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(16 * dp, 8 * dp, 16 * dp, 0);
+        wrap.addView(input, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        return wrap;
+    }
+
+    private void promptMoveOrCopy(Song song, boolean move) {
+        if (!hasAllFilesAccess()) {
+            Toast.makeText(this, "需要文件访问权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        List<String> options = new ArrayList<>();
+        for (String folder : folderNames) {
+            if (!folder.equals(song.folder)) options.add(folder);
+        }
+        if (!options.contains(ROOT_LABEL) && !ROOT_LABEL.equals(song.folder)) {
+            options.add(ROOT_LABEL);
+        }
+        if (options.isEmpty()) {
+            Toast.makeText(this, "没有其他可选的文件夹，先新建一个吧",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] arr = options.toArray(new String[0]);
+        String title = move ? "移动到" : "复制到";
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setItems(arr, (d, w) -> {
+                    if (move) moveSongTo(song, arr[w]);
+                    else copySongTo(song, arr[w]);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private File destDirFor(String destFolder) {
+        return ROOT_LABEL.equals(destFolder)
+                ? scanRoot()
+                : new File(scanRoot(), destFolder);
+    }
+
+    private void moveSongTo(Song song, String destFolder) {
+        File destDir = destDirFor(destFolder);
+        if (destDir == null) {
+            Toast.makeText(this, "目标目录无效", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!destDir.exists() && !destDir.mkdirs()) {
+            Toast.makeText(this, "无法创建目标目录", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File source = new File(song.path);
+        File dest = new File(destDir, source.getName());
+        if (source.getAbsoluteFile().equals(dest.getAbsoluteFile())) return;
+        if (dest.exists()) {
+            Toast.makeText(this, "目标已存在同名文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Song current = currentSongOrNull();
+        boolean wasPlaying = current != null && song.path.equals(current.path);
+        if (wasPlaying) {
+            stopPlayer();
+            playingIndex = -1;
+            playQueue = Collections.emptyList();
+            clearLyrics();
+            nowPlaying.setText("未播放");
+            nowMeta.setText("");
+            playSourceLabel = null;
+            playSourceKind = null;
+            updatePlayButton();
+            adapter.setPlayingPath(null);
+            adapter.setPlayingSource(null, null);
+        }
+
+        boolean moved = source.renameTo(dest);
+        if (!moved) {
+            try {
+                copyFile(source, dest);
+                if (!source.delete()) {
+                    dest.delete();
+                    Toast.makeText(this, "移动失败（无法删除源文件）",
+                            Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                moved = true;
+            } catch (IOException e) {
+                Toast.makeText(this, "移动失败：" + e.getMessage(),
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+        }
+
+        File oldSc = Sidecar.sidecarFor(song.path);
+        File newSc = Sidecar.sidecarFor(dest.getAbsolutePath());
+        if (oldSc != null && oldSc.exists() && newSc != null
+                && !oldSc.getAbsoluteFile().equals(newSc.getAbsoluteFile())) {
+            if (!oldSc.renameTo(newSc)) {
+                try {
+                    copyFile(oldSc, newSc);
+                    oldSc.delete();
+                } catch (IOException ignored) {
+                }
+            }
+        }
+
+        MediaScannerConnection.scanFile(this,
+                new String[]{song.path, dest.getAbsolutePath()}, null,
+                (path, uri) -> runOnUiThread(this::reloadAfterFsChange));
+        Toast.makeText(this, "已移动到「" + destFolder + "」",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void copySongTo(Song song, String destFolder) {
+        File destDir = destDirFor(destFolder);
+        if (destDir == null) {
+            Toast.makeText(this, "目标目录无效", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!destDir.exists() && !destDir.mkdirs()) {
+            Toast.makeText(this, "无法创建目标目录", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File source = new File(song.path);
+        File dest = new File(destDir, source.getName());
+        if (source.getAbsoluteFile().equals(dest.getAbsoluteFile())) {
+            Toast.makeText(this, "源和目标相同", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (dest.exists()) {
+            Toast.makeText(this, "目标已存在同名文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            copyFile(source, dest);
+        } catch (IOException e) {
+            Toast.makeText(this, "复制失败：" + e.getMessage(),
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        File srcSc = Sidecar.sidecarFor(song.path);
+        File destSc = Sidecar.sidecarFor(dest.getAbsolutePath());
+        if (srcSc != null && srcSc.exists() && destSc != null
+                && !srcSc.getAbsoluteFile().equals(destSc.getAbsoluteFile())) {
+            try {
+                copyFile(srcSc, destSc);
+            } catch (IOException ignored) {
+            }
+        }
+
+        MediaScannerConnection.scanFile(this,
+                new String[]{dest.getAbsolutePath()}, null,
+                (path, uri) -> runOnUiThread(this::reloadAfterFsChange));
+        Toast.makeText(this, "已复制到「" + destFolder + "」",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    private void copyFile(File src, File dst) throws IOException {
+        try (FileInputStream in = new FileInputStream(src);
+             FileOutputStream out = new FileOutputStream(dst)) {
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        }
     }
 
     private void renameSong(Song song, String newName) {
@@ -2191,8 +3203,15 @@ public class MainActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onPause() {
+        super.onPause();
+        saveResumeState();
+    }
+
+    @Override
     protected void onDestroy() {
         super.onDestroy();
+        saveResumeState();
         stopPlayer();
     }
 }

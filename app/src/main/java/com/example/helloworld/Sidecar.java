@@ -31,6 +31,7 @@ public class Sidecar {
         public Set<String> scenes = new LinkedHashSet<>();
         public boolean classified = false;
         public boolean lyricsAttempted = false;
+        public boolean manualOverride = false;
         public final List<String> headerLines = new ArrayList<>();
     }
 
@@ -136,6 +137,9 @@ public class Sidecar {
                 case "lyrics":
                     d.lyricsAttempted = "1".equals(v);
                     break;
+                case "manual":
+                    d.manualOverride = "1".equals(v);
+                    break;
             }
         }
     }
@@ -156,6 +160,7 @@ public class Sidecar {
                 first = false;
             }
             spec.append(";classified=1");
+            if (data.manualOverride) spec.append(";manual=1");
         }
         if (data.lyricsAttempted) {
             if (spec.length() > 0) spec.append(";");

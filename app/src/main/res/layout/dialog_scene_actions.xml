@@ -44,31 +44,6 @@
         android:layout_height="0.5dp"
         android:background="@color/divider" />
 
-    <TextView
-        android:id="@+id/sceneTagsLabel"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingStart="24dp"
-        android:paddingTop="14dp"
-        android:paddingEnd="24dp"
-        android:paddingBottom="2dp"
-        android:text="场景标签"
-        android:textColor="@color/text_secondary"
-        android:textSize="11sp" />
-
-    <LinearLayout
-        android:id="@+id/sceneTagsContainer"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical" />
-
-    <View
-        android:id="@+id/sceneTagsDivider"
-        android:layout_width="match_parent"
-        android:layout_height="0.5dp"
-        android:layout_marginTop="6dp"
-        android:background="@color/divider" />
-
     <LinearLayout
         android:id="@+id/actionRename"
         android:layout_width="match_parent"
@@ -94,7 +69,7 @@
     </LinearLayout>
 
     <LinearLayout
-        android:id="@+id/actionSelect"
+        android:id="@+id/actionCount"
         android:layout_width="match_parent"
         android:layout_height="56dp"
         android:background="?android:attr/selectableItemBackground"
@@ -106,19 +81,27 @@
         <ImageView
             android:layout_width="22dp"
             android:layout_height="22dp"
-            android:src="@drawable/ic_select_multi" />
+            android:src="@drawable/ic_tag" />
 
         <TextView
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginStart="20dp"
-            android:text="选择多个"
+            android:layout_weight="1"
+            android:text="歌曲数量"
             android:textColor="@color/text_primary"
             android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/countValue"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
     </LinearLayout>
 
     <LinearLayout
-        android:id="@+id/actionMove"
+        android:id="@+id/actionSwap"
         android:layout_width="match_parent"
         android:layout_height="56dp"
         android:background="?android:attr/selectableItemBackground"
@@ -130,43 +113,18 @@
         <ImageView
             android:layout_width="22dp"
             android:layout_height="22dp"
-            android:src="@drawable/ic_folder" />
+            android:src="@drawable/ic_mode_shuffle" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="20dp"
-            android:text="移动到..."
-            android:textColor="@color/text_primary"
-            android:textSize="15sp" />
-    </LinearLayout>
-
-    <LinearLayout
-        android:id="@+id/actionCopy"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:background="?android:attr/selectableItemBackground"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp">
-
-        <ImageView
-            android:layout_width="22dp"
-            android:layout_height="22dp"
-            android:src="@drawable/ic_folder" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="20dp"
-            android:text="复制到..."
+            android:text="更换曲目"
             android:textColor="@color/text_primary"
             android:textSize="15sp" />
     </LinearLayout>
 
     <View
-        android:id="@+id/actionDeleteDivider"
         android:layout_width="match_parent"
         android:layout_height="0.5dp"
         android:layout_marginTop="6dp"

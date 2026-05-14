@@ -22,6 +22,8 @@ public class Providers {
     public static final String KEY_RESCAN_ALL_PENDING = "pending_rescan_all";
     public static final String KEY_SCENE_ORDER_PREFIX = "scene_order_";
     public static final String KEY_FOLDER_ORDER_PREFIX = "folder_order_";
+    public static final String KEY_SCENE_COUNT_PREFIX = "scene_count_";
+    public static final String KEY_SCENE_EVICTED_PREFIX = "scene_evicted_";
 
     private Providers() {}
 
@@ -109,6 +111,44 @@ public class Providers {
         if (folder == null) return;
         org.json.JSONArray arr = new org.json.JSONArray(order == null ? new ArrayList<>() : order);
         sp.edit().putString(KEY_FOLDER_ORDER_PREFIX + folder, arr.toString()).apply();
+    }
+
+    public static int getSceneCount(SharedPreferences sp, String scene) {
+        if (scene == null) return 0;
+        return Math.max(0, sp.getInt(KEY_SCENE_COUNT_PREFIX + scene, 0));
+    }
+
+    public static void setSceneCount(SharedPreferences sp, String scene, int count) {
+        if (scene == null) return;
+        sp.edit().putInt(KEY_SCENE_COUNT_PREFIX + scene, Math.max(0, count)).apply();
+    }
+
+    public static java.util.Set<String> getSceneEvicted(SharedPreferences sp, String scene) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (scene == null) return out;
+        String json = sp.getString(KEY_SCENE_EVICTED_PREFIX + scene, "[]");
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                String s = arr.optString(i, null);
+                if (s != null) out.add(s);
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    public static void setSceneEvicted(SharedPreferences sp, String scene,
+                                       java.util.Collection<String> qks) {
+        if (scene == null) return;
+        org.json.JSONArray arr = new org.json.JSONArray(
+                qks == null ? java.util.Collections.emptyList() : qks);
+        sp.edit().putString(KEY_SCENE_EVICTED_PREFIX + scene, arr.toString()).apply();
+    }
+
+    public static void clearSceneEvicted(SharedPreferences sp, String scene) {
+        if (scene == null) return;
+        sp.edit().remove(KEY_SCENE_EVICTED_PREFIX + scene).apply();
     }
 
     public static boolean takeRescanPending(SharedPreferences sp) {
