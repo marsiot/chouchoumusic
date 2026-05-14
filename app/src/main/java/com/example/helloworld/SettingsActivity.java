@@ -17,11 +17,15 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
@@ -39,6 +43,8 @@ public class SettingsActivity extends AppCompatActivity {
 
     private SharedPreferences sp;
     private LinearLayout container;
+    private TextView scanDirValue;
+    private ActivityResultLauncher<Intent> dirPickerLauncher;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -48,8 +54,26 @@ public class SettingsActivity extends AppCompatActivity {
         sp = Providers.prefs(this);
         Providers.migrateLegacyPrefs(sp);
 
+        dirPickerLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(),
+                result -> {
+                    if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                        String path = result.getData().getStringExtra(
+                                DirectoryPickerActivity.RESULT_PATH);
+                        Providers.setScanDir(sp, path);
+                        if (scanDirValue != null) {
+                            scanDirValue.setText("内部存储/" + Providers.getScanDir(sp));
+                        }
+                    }
+                });
+
         container = findViewById(R.id.providersContainer);
         findViewById(R.id.btnClose).setOnClickListener(v -> finish());
+
+        container.addView(makeSectionTitle("扫描目录", 0));
+        container.addView(buildScanDirCard());
+
+        container.addView(makeSectionTitle("AI 服务商", dp(18)));
 
         TextView intro = new TextView(this);
         intro.setText("启用多个平台时，前一个失败会自动切到下一个。Key 仅保存本机。");
@@ -57,17 +81,161 @@ public class SettingsActivity extends AppCompatActivity {
         intro.setTextSize(12f);
         LinearLayout.LayoutParams introLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        introLp.bottomMargin = dp(16);
+        introLp.bottomMargin = dp(12);
         intro.setLayoutParams(introLp);
         container.addView(intro);
 
         for (AiClassifier.Provider p : AiClassifier.Provider.values()) {
             container.addView(buildProviderCard(p));
         }
+
+        container.addView(makeSectionTitle("扫描歌曲", dp(18)));
+        container.addView(buildRescanCard());
+    }
+
+    private View buildRescanCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(COLOR_ELEVATED);
+        bg.setCornerRadius(dp(14));
+        card.setBackground(bg);
+        card.setPadding(dp(18), dp(16), dp(18), dp(16));
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardLp.bottomMargin = dp(8);
+        card.setLayoutParams(cardLp);
+
+        TextView hint = new TextView(this);
+        hint.setText("新加进 /Music 的歌曲会被自动扫到，但 AI 分析需要手动触发。");
+        hint.setTextColor(COLOR_SECONDARY);
+        hint.setTextSize(11f);
+        card.addView(hint);
+
+        Button btnScan = new Button(this);
+        btnScan.setText("扫描未分析的歌曲");
+        btnScan.setAllCaps(false);
+        btnScan.setTextSize(14f);
+        btnScan.setTextColor(COLOR_BG);
+        btnScan.setBackgroundTintList(ColorStateList.valueOf(COLOR_ACCENT));
+        btnScan.setPadding(dp(16), dp(8), dp(16), dp(8));
+        LinearLayout.LayoutParams scanLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        scanLp.topMargin = dp(12);
+        btnScan.setLayoutParams(scanLp);
+        btnScan.setOnClickListener(v -> {
+            Providers.setRescanPending(sp);
+            Toast.makeText(this, "返回主页面开始扫描", Toast.LENGTH_SHORT).show();
+            finish();
+        });
+        card.addView(btnScan);
+
+        TextView destruct = new TextView(this);
+        destruct.setText("重新分析所有歌曲（清除已有标签）");
+        destruct.setTextColor(0xFFD08770);
+        destruct.setTextSize(13f);
+        destruct.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        destruct.setBackground(ContextCompat.getDrawable(this,
+                android.R.drawable.list_selector_background));
+        destruct.setClickable(true);
+        destruct.setFocusable(true);
+        destruct.setPadding(dp(12), dp(12), dp(12), dp(12));
+        LinearLayout.LayoutParams destLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        destLp.topMargin = dp(6);
+        destruct.setLayoutParams(destLp);
+        destruct.setOnClickListener(v -> confirmRescanAll());
+        card.addView(destruct);
+
+        return card;
+    }
+
+    private void confirmRescanAll() {
+        new AlertDialog.Builder(this)
+                .setTitle("重新分析所有歌曲")
+                .setMessage("将清除所有歌曲已有的场景标签（手动设置的也会清掉），重新调 AI 重头分析一遍。可能耗时几分钟。")
+                .setPositiveButton("确认重新分析", (d, w) -> {
+                    Providers.setRescanAllPending(sp);
+                    Toast.makeText(this, "返回主页面开始重新分析", Toast.LENGTH_SHORT).show();
+                    finish();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density);
+    }
+
+    private TextView makeSectionTitle(String text, int topMargin) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(COLOR_PRIMARY);
+        tv.setTextSize(22f);
+        tv.setTypeface(tv.getTypeface(), android.graphics.Typeface.BOLD);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = topMargin;
+        lp.bottomMargin = dp(12);
+        tv.setLayoutParams(lp);
+        return tv;
+    }
+
+    private View buildScanDirCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.HORIZONTAL);
+        card.setGravity(Gravity.CENTER_VERTICAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(COLOR_ELEVATED);
+        bg.setCornerRadius(dp(14));
+        card.setBackground(bg);
+        card.setPadding(dp(18), dp(16), dp(18), dp(16));
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setOnClickListener(v -> {
+            Intent i = new Intent(this, DirectoryPickerActivity.class);
+            i.putExtra(DirectoryPickerActivity.EXTRA_INITIAL, Providers.getScanDir(sp));
+            dirPickerLauncher.launch(i);
+        });
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardLp.bottomMargin = dp(8);
+        card.setLayoutParams(cardLp);
+
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams colLp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        colLp.weight = 1;
+        textCol.setLayoutParams(colLp);
+
+        TextView label = new TextView(this);
+        label.setText("音乐根目录");
+        label.setTextColor(COLOR_PRIMARY);
+        label.setTextSize(15f);
+        textCol.addView(label);
+
+        scanDirValue = new TextView(this);
+        scanDirValue.setText("内部存储/" + Providers.getScanDir(sp));
+        scanDirValue.setTextColor(COLOR_ACCENT);
+        scanDirValue.setTextSize(12f);
+        scanDirValue.setTypeface(android.graphics.Typeface.MONOSPACE);
+        LinearLayout.LayoutParams valLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        valLp.topMargin = dp(4);
+        scanDirValue.setLayoutParams(valLp);
+        textCol.addView(scanDirValue);
+
+        card.addView(textCol);
+
+        ImageView chev = new ImageView(this);
+        chev.setImageResource(R.drawable.ic_chevron);
+        LinearLayout.LayoutParams chevLp = new LinearLayout.LayoutParams(dp(16), dp(16));
+        chevLp.leftMargin = dp(10);
+        chev.setLayoutParams(chevLp);
+        card.addView(chev);
+
+        return card;
     }
 
     private View buildProviderCard(AiClassifier.Provider p) {

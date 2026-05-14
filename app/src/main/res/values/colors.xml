@@ -1,7 +1,7 @@
 <resources>
     <!-- Base surfaces -->
     <color name="bg">#FF0A0A0A</color>
-    <color name="bg_elevated">#FF141414</color>
+    <color name="bg_elevated">#FF2D2D2D</color>
     <color name="bg_overlay">#F2080808</color>
 
     <!-- Text -->

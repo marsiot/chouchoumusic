@@ -63,6 +63,18 @@
             android:paddingBottom="18dp">
 
             <TextView
+                android:id="@+id/sectionPath"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp"
+                android:ellipsize="middle"
+                android:fontFamily="monospace"
+                android:letterSpacing="0.04"
+                android:singleLine="true"
+                android:textColor="@color/accent"
+                android:textSize="12sp" />
+
+            <TextView
                 android:id="@+id/sectionTitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -149,7 +161,7 @@
                 android:background="?android:attr/selectableItemBackgroundBorderless"
                 android:contentDescription="模式"
                 android:padding="10dp"
-                android:src="@drawable/ic_mode_sequential" />
+                android:src="@drawable/ic_mode_loop" />
 
             <ImageView
                 android:id="@+id/btnPrev"

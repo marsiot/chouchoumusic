@@ -15,6 +15,11 @@ public class Providers {
     public static final String KEY_API_KEY_PREFIX = "api_key_";
     public static final String KEY_CUSTOM_URL = "provider_custom_url";
     public static final String KEY_CUSTOM_MODEL = "provider_custom_model";
+    public static final String KEY_SCAN_DIR = "scan_root_dir";
+    public static final String DEFAULT_SCAN_DIR = "Music";
+
+    public static final String KEY_RESCAN_PENDING = "pending_rescan";
+    public static final String KEY_RESCAN_ALL_PENDING = "pending_rescan_all";
 
     private Providers() {}
 
@@ -52,6 +57,42 @@ public class Providers {
 
     public static void setCustomModel(SharedPreferences sp, String model) {
         sp.edit().putString(KEY_CUSTOM_MODEL, model == null ? "" : model).apply();
+    }
+
+    public static String getScanDir(SharedPreferences sp) {
+        String s = sp.getString(KEY_SCAN_DIR, DEFAULT_SCAN_DIR);
+        s = s == null ? DEFAULT_SCAN_DIR : s.trim();
+        while (s.startsWith("/")) s = s.substring(1);
+        while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
+        return s.isEmpty() ? DEFAULT_SCAN_DIR : s;
+    }
+
+    public static boolean takeRescanPending(SharedPreferences sp) {
+        boolean v = sp.getBoolean(KEY_RESCAN_PENDING, false);
+        if (v) sp.edit().remove(KEY_RESCAN_PENDING).apply();
+        return v;
+    }
+
+    public static void setRescanPending(SharedPreferences sp) {
+        sp.edit().putBoolean(KEY_RESCAN_PENDING, true).apply();
+    }
+
+    public static boolean takeRescanAllPending(SharedPreferences sp) {
+        boolean v = sp.getBoolean(KEY_RESCAN_ALL_PENDING, false);
+        if (v) sp.edit().remove(KEY_RESCAN_ALL_PENDING).apply();
+        return v;
+    }
+
+    public static void setRescanAllPending(SharedPreferences sp) {
+        sp.edit().putBoolean(KEY_RESCAN_ALL_PENDING, true).apply();
+    }
+
+    public static void setScanDir(SharedPreferences sp, String dir) {
+        String s = dir == null ? "" : dir.trim();
+        while (s.startsWith("/")) s = s.substring(1);
+        while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
+        if (s.isEmpty()) s = DEFAULT_SCAN_DIR;
+        sp.edit().putString(KEY_SCAN_DIR, s).apply();
     }
 
     public static String resolveUrl(SharedPreferences sp, AiClassifier.Provider p) {

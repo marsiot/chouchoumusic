@@ -9,6 +9,7 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.media.MediaPlayer;
+import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -37,11 +38,15 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.google.android.material.bottomsheet.BottomSheetBehavior;
+import com.google.android.material.bottomsheet.BottomSheetDialog;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -53,18 +58,18 @@ import java.util.TreeMap;
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQ_PERM = 1001;
-    private static final String DEFAULT_DIR = "/Music/";
     private static final String ROOT_LABEL = "(根目录)";
+    private static final String STORAGE_LABEL = "内部存储";
     private static final String PREFS = Providers.PREFS;
     private static final String KEY_CUSTOM_SCENES = "custom_scenes";
     private static final int BATCH_SIZE = 10;
 
     private final List<String> customScenes = new ArrayList<>();
+    private String scanRootDir = Providers.DEFAULT_SCAN_DIR;
 
     private enum Mode { FOLDERS, SONGS, SCENE_SONGS }
 
     private enum PlayMode {
-        SEQUENTIAL(R.drawable.ic_mode_sequential, "顺序"),
         LOOP_ALL(R.drawable.ic_mode_loop, "循环"),
         REPEAT_ONE(R.drawable.ic_mode_repeat_one, "单曲"),
         SHUFFLE(R.drawable.ic_mode_shuffle, "随机");
@@ -75,6 +80,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private TextView topTitle;
+    private TextView sectionPath;
     private TextView sectionTitle;
     private TextView sectionMeta;
     private ImageView btnBack;
@@ -107,8 +113,11 @@ public class MainActivity extends AppCompatActivity {
     private int playingIndex = -1;
     private String playSourceLabel = null;
 
-    private PlayMode playMode = PlayMode.SEQUENTIAL;
+    private PlayMode playMode = PlayMode.LOOP_ALL;
     private final Random random = new Random();
+
+    private boolean selectionMode = false;
+    private final Set<String> selectedPaths = new HashSet<>();
 
     private List<LrcParser.Line> lyrics = Collections.emptyList();
     private int currentLyricIndex = -1;
@@ -146,7 +155,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private static class Row {
-        enum Kind { SCENE, FOLDER, ADD_SCENE, SONG, EMPTY_HINT }
+        enum Kind { SCENE, FOLDER, ADD_SCENE, ADD_FOLDER, SONG, EMPTY_HINT }
         final Kind kind;
         final String primary;
         final String secondary;
@@ -169,11 +178,16 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    interface OnMoreClickListener { void onMore(Row row); }
+
     private static class RowAdapter extends ArrayAdapter<Row> {
         private final int colorPrimary;
         private final int colorAccent;
         private final int colorSecondary;
         private final int colorTertiary;
+        private final int colorSelected = 0x33C9A876;
+        private Set<String> selectedKeys = null;
+        private OnMoreClickListener moreListener;
 
         RowAdapter(Context c) {
             super(c, 0);
@@ -181,6 +195,15 @@ public class MainActivity extends AppCompatActivity {
             colorAccent = ContextCompat.getColor(c, R.color.accent);
             colorSecondary = ContextCompat.getColor(c, R.color.text_secondary);
             colorTertiary = ContextCompat.getColor(c, R.color.text_tertiary);
+        }
+
+        void setSelectedKeys(Set<String> keys) {
+            this.selectedKeys = keys;
+            notifyDataSetChanged();
+        }
+
+        void setOnMoreClickListener(OnMoreClickListener l) {
+            this.moreListener = l;
         }
 
         @Override
@@ -198,7 +221,7 @@ public class MainActivity extends AppCompatActivity {
             primary.setText(r.primary);
             if (r.kind == Row.Kind.EMPTY_HINT) {
                 primary.setTextColor(colorTertiary);
-            } else if (r.kind == Row.Kind.ADD_SCENE) {
+            } else if (r.kind == Row.Kind.ADD_SCENE || r.kind == Row.Kind.ADD_FOLDER) {
                 primary.setTextColor(colorSecondary);
             } else {
                 primary.setTextColor(r.accent ? colorAccent : colorPrimary);
@@ -219,6 +242,37 @@ public class MainActivity extends AppCompatActivity {
             }
 
             chevron.setVisibility(r.showChevron ? View.VISIBLE : View.INVISIBLE);
+
+            ImageView more = v.findViewById(R.id.rowMore);
+            ImageView check = v.findViewById(R.id.rowCheck);
+            boolean inSelectionMode = selectedKeys != null;
+            boolean isSongRow = r.kind == Row.Kind.SONG && r.song != null;
+            boolean isFolderRow = r.kind == Row.Kind.FOLDER;
+
+            if (isSongRow && inSelectionMode) {
+                more.setVisibility(View.GONE);
+                more.setOnClickListener(null);
+                check.setVisibility(View.VISIBLE);
+                boolean selected = r.key != null && selectedKeys.contains(r.key);
+                check.setImageResource(selected
+                        ? R.drawable.ic_check_on : R.drawable.ic_check_off);
+            } else if (isSongRow || isFolderRow) {
+                check.setVisibility(View.GONE);
+                more.setVisibility(View.VISIBLE);
+                final Row rRef = r;
+                more.setOnClickListener(view -> {
+                    if (moreListener != null) moreListener.onMore(rRef);
+                });
+            } else {
+                check.setVisibility(View.GONE);
+                more.setVisibility(View.GONE);
+                more.setOnClickListener(null);
+            }
+
+            boolean highlight = isSongRow && inSelectionMode
+                    && r.key != null && selectedKeys.contains(r.key);
+            v.setBackgroundColor(highlight ? colorSelected : 0);
+
             return v;
         }
     }
@@ -229,6 +283,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         topTitle = findViewById(R.id.topTitle);
+        sectionPath = findViewById(R.id.sectionPath);
         sectionTitle = findViewById(R.id.sectionTitle);
         sectionMeta = findViewById(R.id.sectionMeta);
         btnBack = findViewById(R.id.btnBack);
@@ -252,24 +307,41 @@ public class MainActivity extends AppCompatActivity {
         fetcher = new LyricsFetcher(this);
         classCache = new ClassificationCache(this);
         Providers.migrateLegacyPrefs(Providers.prefs(this));
+        scanRootDir = Providers.getScanDir(Providers.prefs(this));
         loadCustomScenes();
 
         adapter = new RowAdapter(this);
+        adapter.setOnMoreClickListener(r -> {
+            if (r.kind == Row.Kind.SONG && r.song != null) {
+                showSongOptions(r.song);
+            } else if (r.kind == Row.Kind.FOLDER && r.key != null) {
+                confirmDeleteFolder(r.key);
+            }
+        });
         listView.setAdapter(adapter);
         listView.setOnItemClickListener((parent, view, position, id) -> {
             Row r = adapter.getItem(position);
             if (r == null) return;
+            if (selectionMode) {
+                if (r.kind == Row.Kind.SONG && r.song != null) toggleSelection(r.song);
+                return;
+            }
             switch (r.kind) {
                 case SCENE: onSceneClicked(r.key); break;
                 case FOLDER: openFolder(r.key); break;
                 case ADD_SCENE: promptAddScene(); break;
+                case ADD_FOLDER: promptNewFolder(); break;
                 case SONG: {
                     if (mode == Mode.SONGS) {
                         List<Song> list = folders.get(currentFolder);
-                        if (list != null) play(list, position, currentFolder);
+                        if (list != null && !list.isEmpty()) {
+                            int idx = list.indexOf(r.song);
+                            if (idx >= 0) play(list, idx, currentFolder);
+                        }
                     } else if (mode == Mode.SCENE_SONGS) {
                         List<Song> list = songsForScene(currentScene);
-                        play(list, position, currentScene);
+                        int idx = list.indexOf(r.song);
+                        if (idx >= 0) play(list, idx, currentScene);
                     }
                     break;
                 }
@@ -284,13 +356,14 @@ public class MainActivity extends AppCompatActivity {
                 promptDeleteScene(r.key);
                 return true;
             }
+            if (r.kind == Row.Kind.SONG && r.song != null && !selectionMode) {
+                showSongOptions(r.song);
+                return true;
+            }
             return false;
         });
 
-        btnBack.setOnClickListener(v -> {
-            if (mode == Mode.SONGS || mode == Mode.SCENE_SONGS) showFolders();
-        });
-        btnSettings.setOnClickListener(v -> openSettings());
+        updateTopBar();
 
         // Tap on the text area of mini player → expand lyrics
         miniPlayer.findViewById(R.id.nowPlaying).setOnClickListener(v -> tryShowLyrics());
@@ -307,6 +380,10 @@ public class MainActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
+                if (selectionMode) {
+                    exitSelectionMode();
+                    return;
+                }
                 if (lyricsOverlay.getVisibility() == View.VISIBLE) {
                     hideLyrics();
                     return;
@@ -426,7 +503,9 @@ public class MainActivity extends AppCompatActivity {
                 MediaStore.Audio.Media.DATA
         };
         String selection = MediaStore.Audio.Media.DATA + " LIKE ? OR " + MediaStore.Audio.Media.DATA + " LIKE ?";
-        String[] args = {"%/Music/%", "%/music/%"};
+        String pat = "%/" + scanRootDir + "/%";
+        String patLower = "%/" + scanRootDir.toLowerCase() + "/%";
+        String[] args = patLower.equals(pat) ? new String[]{pat, pat} : new String[]{pat, patLower};
         String sort = MediaStore.Audio.Media.DATA + " ASC";
 
         try (Cursor c = getContentResolver().query(
@@ -451,6 +530,20 @@ public class MainActivity extends AppCompatActivity {
             }
         }
 
+        if (hasAllFilesAccess()) {
+            File musicDir = scanRoot();
+            File[] subdirs = (musicDir != null && musicDir.isDirectory())
+                    ? musicDir.listFiles(File::isDirectory) : null;
+            if (subdirs != null) {
+                for (File d : subdirs) {
+                    String name = d.getName();
+                    if (!folders.containsKey(name)) {
+                        folders.put(name, new ArrayList<>());
+                    }
+                }
+            }
+        }
+
         folderNames.addAll(folders.keySet());
 
         if (hasAllFilesAccess()) {
@@ -463,20 +556,26 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (folderNames.isEmpty()) {
-            Toast.makeText(this, "未找到音乐文件，请检查 /Music 目录", Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    "未找到音乐文件，请检查内部存储/" + scanRootDir + " 目录",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
-    private static String extractFolder(String path) {
+    private File scanRoot() {
+        return new File(Environment.getExternalStorageDirectory(), scanRootDir);
+    }
+
+    private String extractFolder(String path) {
         if (path == null) return null;
-        int idx = path.indexOf("/Music/");
-        int len = "/Music/".length();
+        String marker = "/" + scanRootDir + "/";
+        int idx = path.indexOf(marker);
         if (idx < 0) {
-            idx = path.indexOf("/music/");
-            len = "/music/".length();
+            String lower = path.toLowerCase();
+            idx = lower.indexOf(marker.toLowerCase());
         }
         if (idx < 0) return null;
-        String rest = path.substring(idx + len);
+        String rest = path.substring(idx + marker.length());
         int slash = rest.indexOf('/');
         if (slash < 0) return ROOT_LABEL;
         String name = rest.substring(0, slash);
@@ -553,7 +652,9 @@ public class MainActivity extends AppCompatActivity {
         currentFolder = null;
         currentScene = null;
 
-        btnBack.setVisibility(View.GONE);
+        updateTopBar();
+        sectionPath.setText(STORAGE_LABEL + "/" + scanRootDir + "/");
+        sectionPath.setVisibility(View.VISIBLE);
         sectionTitle.setText("全部");
         updateSectionMeta();
 
@@ -570,6 +671,8 @@ public class MainActivity extends AppCompatActivity {
             adapter.add(new Row(Row.Kind.FOLDER, name, null,
                     String.valueOf(count), true, false, name, null));
         }
+        adapter.add(new Row(Row.Kind.ADD_FOLDER, "新建文件夹", null,
+                null, false, false, null, null));
         adapter.notifyDataSetChanged();
         listView.smoothScrollToPosition(0);
     }
@@ -597,7 +700,9 @@ public class MainActivity extends AppCompatActivity {
         currentFolder = folder;
         currentScene = null;
 
-        btnBack.setVisibility(View.VISIBLE);
+        updateTopBar();
+        sectionPath.setText(STORAGE_LABEL + "/" + scanRootDir + "/" + folder + "/");
+        sectionPath.setVisibility(View.VISIBLE);
         sectionTitle.setText(folder);
 
         adapter.clear();
@@ -632,7 +737,9 @@ public class MainActivity extends AppCompatActivity {
         currentScene = sceneKey;
         currentFolder = null;
 
-        btnBack.setVisibility(View.VISIBLE);
+        updateTopBar();
+        sectionPath.setText("智能场景 · AI 标签");
+        sectionPath.setVisibility(View.VISIBLE);
         sectionTitle.setText(sceneKey);
 
         List<Song> list = songsForScene(sceneKey);
@@ -886,21 +993,6 @@ public class MainActivity extends AppCompatActivity {
         int n = playQueue.size();
         int newIdx;
         switch (playMode) {
-            case SEQUENTIAL:
-                newIdx = playingIndex + 1;
-                if (newIdx >= n) {
-                    if (autoFromCompletion) {
-                        stopPlayer();
-                        nowPlaying.setText("播放完毕");
-                        nowMeta.setText("");
-                        playingIndex = -1;
-                        clearLyrics();
-                        updatePlayButton();
-                        return;
-                    }
-                    newIdx = 0;
-                }
-                break;
             case LOOP_ALL:
                 newIdx = (playingIndex + 1) % n;
                 break;
@@ -911,7 +1003,7 @@ public class MainActivity extends AppCompatActivity {
                 newIdx = pickRandomExcept(n, playingIndex);
                 break;
             default:
-                newIdx = playingIndex + 1;
+                newIdx = (playingIndex + 1) % n;
         }
         play(playQueue, newIdx, playSourceLabel);
     }
@@ -1027,10 +1119,16 @@ public class MainActivity extends AppCompatActivity {
         scanDone = 0;
         scanTotal = todo.size();
         updateSectionMeta();
-        runNextBatch(todo, 0);
+        runNextBatch(classifierPool, todo, 0);
     }
 
-    private void runNextBatch(final List<AiClassifier.Item> all, final int from) {
+    private void runNextBatch(final ClassifierPool pool,
+                              final List<AiClassifier.Item> all, final int from) {
+        if (pool == null) {
+            scanning = false;
+            updateSectionMeta();
+            return;
+        }
         if (from >= all.size()) {
             scanning = false;
             updateSectionMeta();
@@ -1040,7 +1138,7 @@ public class MainActivity extends AppCompatActivity {
         }
         int to = Math.min(from + BATCH_SIZE, all.size());
         List<AiClassifier.Item> batch = all.subList(from, to);
-        classifierPool.classifyBatch(batch, (results, error) -> {
+        pool.classifyBatch(batch, (results, error) -> {
             if (error != null) {
                 scanning = false;
                 updateSectionMeta();
@@ -1052,7 +1150,7 @@ public class MainActivity extends AppCompatActivity {
             scanDone = to;
             updateSectionMeta();
             refreshCurrentView();
-            runNextBatch(all, to);
+            runNextBatch(pool, all, to);
         });
     }
 
@@ -1157,6 +1255,416 @@ public class MainActivity extends AppCompatActivity {
         maybeStartClassifyScan();
     }
 
+    private void showSongOptions(Song song) {
+        BottomSheetDialog sheet = new BottomSheetDialog(this);
+        View content = getLayoutInflater().inflate(R.layout.dialog_song_actions, null);
+
+        ((TextView) content.findViewById(R.id.sheetTitle)).setText(song.name);
+        ((TextView) content.findViewById(R.id.sheetSubtitle)).setText(song.folder);
+
+        content.findViewById(R.id.actionEditTags).setOnClickListener(v -> {
+            sheet.dismiss();
+            showTagEditor(song);
+        });
+        content.findViewById(R.id.actionRename).setOnClickListener(v -> {
+            sheet.dismiss();
+            promptRename(song);
+        });
+        content.findViewById(R.id.actionSelect).setOnClickListener(v -> {
+            sheet.dismiss();
+            enterSelectionMode(song);
+        });
+        content.findViewById(R.id.actionDelete).setOnClickListener(v -> {
+            sheet.dismiss();
+            confirmDeleteSingle(song);
+        });
+
+        sheet.setContentView(content);
+        View parent = (View) content.getParent();
+        parent.setBackgroundColor(Color.TRANSPARENT);
+        parent.setElevation(0f);
+        parent.setOutlineProvider(android.view.ViewOutlineProvider.BACKGROUND);
+        BottomSheetBehavior<View> behavior = BottomSheetBehavior.from(parent);
+        behavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+        behavior.setSkipCollapsed(true);
+        if (sheet.getWindow() != null) {
+            sheet.getWindow().setDimAmount(0f);
+            sheet.getWindow().setBackgroundDrawable(null);
+            sheet.getWindow().clearFlags(
+                    android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        sheet.show();
+    }
+
+    private void showTagEditor(Song song) {
+        List<String> scenes = allSceneKeys();
+        if (scenes.isEmpty()) {
+            Toast.makeText(this, "还没有可用的场景，先去添加", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Set<String> current = scenesForSong(song);
+        String[] labels = scenes.toArray(new String[0]);
+        boolean[] checked = new boolean[labels.length];
+        for (int i = 0; i < labels.length; i++) checked[i] = current.contains(labels[i]);
+
+        new AlertDialog.Builder(this)
+                .setTitle("场景标签  ·  " + song.name)
+                .setMultiChoiceItems(labels, checked,
+                        (d, which, isChecked) -> checked[which] = isChecked)
+                .setPositiveButton("保存", (d, w) -> {
+                    LinkedHashSet<String> newTags = new LinkedHashSet<>();
+                    for (int i = 0; i < labels.length; i++) {
+                        if (checked[i]) newTags.add(labels[i]);
+                    }
+                    applyManualTags(song, newTags);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void applyManualTags(Song song, Set<String> tags) {
+        if (hasAllFilesAccess()) {
+            File sf = Sidecar.sidecarFor(song.path);
+            if (sf != null) {
+                Sidecar.Data d = sidecarByPath.get(song.path);
+                if (d == null) d = Sidecar.read(sf);
+                d.scenes = new LinkedHashSet<>(tags);
+                d.classified = true;
+                Sidecar.write(sf, d);
+                sidecarByPath.put(song.path, d);
+            }
+        } else {
+            Sidecar.Data d = sidecarByPath.get(song.path);
+            if (d == null) d = new Sidecar.Data();
+            d.scenes = new LinkedHashSet<>(tags);
+            d.classified = true;
+            sidecarByPath.put(song.path, d);
+        }
+        classCache.put(queryKeyForSong(song), tags);
+        refreshCurrentView();
+        Toast.makeText(this, "标签已更新", Toast.LENGTH_SHORT).show();
+    }
+
+    private void promptRename(Song song) {
+        int dp = (int) getResources().getDisplayMetrics().density;
+
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setText(song.name);
+        input.setSelection(0, Math.max(0, song.name.lastIndexOf('.')));
+        input.setTextColor(Color.parseColor("#FFF2F0EC"));
+        input.setHintTextColor(Color.parseColor("#FF6B6B6B"));
+
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(16 * dp, 8 * dp, 16 * dp, 0);
+        wrap.addView(input, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        new AlertDialog.Builder(this)
+                .setTitle("重命名")
+                .setView(wrap)
+                .setPositiveButton("保存", (d, w) -> {
+                    String newName = input.getText().toString().trim();
+                    if (newName.isEmpty() || newName.equals(song.name)) return;
+                    if (newName.contains("/") || newName.contains("\\")) {
+                        Toast.makeText(this, "名称不能含 / \\", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    String oldExt = extOf(song.name);
+                    String newExt = extOf(newName);
+                    if (!oldExt.equalsIgnoreCase(newExt)) {
+                        Toast.makeText(this, "扩展名不能改（." + oldExt + "）",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    renameSong(song, newName);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private static String extOf(String name) {
+        if (name == null) return "";
+        int dot = name.lastIndexOf('.');
+        return dot < 0 ? "" : name.substring(dot + 1);
+    }
+
+    private void renameSong(Song song, String newName) {
+        if (!hasAllFilesAccess()) {
+            Toast.makeText(this, "需要文件访问权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File oldFile = new File(song.path);
+        File parent = oldFile.getParentFile();
+        if (parent == null) { Toast.makeText(this, "重命名失败", Toast.LENGTH_SHORT).show(); return; }
+        File newFile = new File(parent, newName);
+        if (newFile.exists()) {
+            Toast.makeText(this, "同名文件已存在", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!oldFile.renameTo(newFile)) {
+            Toast.makeText(this, "重命名失败", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File oldSf = Sidecar.sidecarFor(song.path);
+        File newSf = Sidecar.sidecarFor(newFile.getAbsolutePath());
+        if (oldSf != null && oldSf.exists() && newSf != null && !oldSf.equals(newSf)) {
+            oldSf.renameTo(newSf);
+        }
+        final String oldPath = song.path;
+        final String newPath = newFile.getAbsolutePath();
+        MediaScannerConnection.scanFile(this, new String[]{oldPath, newPath}, null,
+                (path, uri) -> runOnUiThread(this::reloadAfterFsChange));
+        Toast.makeText(this, "已重命名", Toast.LENGTH_SHORT).show();
+    }
+
+    private void confirmDeleteSingle(Song song) {
+        new AlertDialog.Builder(this)
+                .setTitle("删除")
+                .setMessage("删除「" + song.name + "」？\n文件和它的 .lrc 一起删除，不可恢复。")
+                .setPositiveButton("删除", (d, w) ->
+                        deleteSongs(Collections.singletonList(song)))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void confirmDeleteSelected() {
+        int n = selectedPaths.size();
+        if (n == 0) return;
+        new AlertDialog.Builder(this)
+                .setTitle("删除 " + n + " 首")
+                .setMessage("选中的 " + n + " 首歌（含 .lrc）将被删除，不可恢复。")
+                .setPositiveButton("删除", (d, w) -> {
+                    List<Song> toDelete = new ArrayList<>();
+                    for (String p : selectedPaths) {
+                        Song s = songByPath.get(p);
+                        if (s != null) toDelete.add(s);
+                    }
+                    exitSelectionMode();
+                    deleteSongs(toDelete);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void deleteSongs(List<Song> songs) {
+        if (!hasAllFilesAccess()) {
+            Toast.makeText(this, "需要文件访问权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int ok = 0;
+        List<String> paths = new ArrayList<>();
+        for (Song s : songs) {
+            paths.add(s.path);
+            File f = new File(s.path);
+            if (f.exists() && f.delete()) ok++;
+            File sf = Sidecar.sidecarFor(s.path);
+            if (sf != null && sf.exists()) sf.delete();
+            if (s.path.equals(currentSongOrNullPath())) {
+                stopPlayer();
+                nowPlaying.setText("未播放");
+                nowMeta.setText("");
+                playingIndex = -1;
+                playQueue = Collections.emptyList();
+                clearLyrics();
+                updatePlayButton();
+            }
+        }
+        MediaScannerConnection.scanFile(this, paths.toArray(new String[0]), null,
+                (path, uri) -> runOnUiThread(this::reloadAfterFsChange));
+        Toast.makeText(this, "已删除 " + ok + " 首", Toast.LENGTH_SHORT).show();
+    }
+
+    private String currentSongOrNullPath() {
+        Song s = currentSongOrNull();
+        return s == null ? null : s.path;
+    }
+
+    private void reloadAfterFsChange() {
+        loadSongs();
+        refreshCurrentView();
+    }
+
+    private void enterSelectionMode(Song initial) {
+        if (mode != Mode.SONGS && mode != Mode.SCENE_SONGS) return;
+        selectionMode = true;
+        selectedPaths.clear();
+        if (initial != null) selectedPaths.add(initial.path);
+        updateTopBar();
+        adapter.setSelectedKeys(selectedPaths);
+    }
+
+    private void exitSelectionMode() {
+        selectionMode = false;
+        selectedPaths.clear();
+        updateTopBar();
+        adapter.setSelectedKeys(null);
+    }
+
+    private void toggleSelection(Song song) {
+        if (!selectedPaths.add(song.path)) selectedPaths.remove(song.path);
+        if (selectedPaths.isEmpty()) {
+            exitSelectionMode();
+        } else {
+            updateTopBar();
+            adapter.setSelectedKeys(selectedPaths);
+        }
+    }
+
+    private void updateTopBar() {
+        if (selectionMode) {
+            btnBack.setVisibility(View.VISIBLE);
+            btnBack.setImageResource(R.drawable.ic_close);
+            btnBack.setOnClickListener(v -> exitSelectionMode());
+            topTitle.setText(selectedPaths.size() + " 已选");
+            btnSettings.setImageResource(R.drawable.ic_delete);
+            btnSettings.setOnClickListener(v -> confirmDeleteSelected());
+        } else {
+            btnBack.setVisibility((mode == Mode.SONGS || mode == Mode.SCENE_SONGS)
+                    ? View.VISIBLE : View.GONE);
+            btnBack.setImageResource(R.drawable.ic_back);
+            btnBack.setOnClickListener(v -> {
+                if (mode == Mode.SONGS || mode == Mode.SCENE_SONGS) showFolders();
+            });
+            topTitle.setText(getString(R.string.app_name));
+            btnSettings.setImageResource(R.drawable.ic_settings);
+            btnSettings.setOnClickListener(v -> openSettings());
+        }
+    }
+
+    private void confirmDeleteFolder(String name) {
+        List<Song> inFolder = folders.get(name);
+        int count = inFolder == null ? 0 : inFolder.size();
+        String msg = count > 0
+                ? "「" + name + "」里有 " + count + " 首歌，删除文件夹会一并删除所有歌曲和它们的 .lrc，不可恢复。"
+                : "「" + name + "」是空文件夹，确认删除？";
+        new AlertDialog.Builder(this)
+                .setTitle("删除文件夹")
+                .setMessage(msg)
+                .setPositiveButton("删除", (d, w) -> deleteFolder(name))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void deleteFolder(String name) {
+        if (!hasAllFilesAccess()) {
+            Toast.makeText(this, "需要文件访问权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File dir = new File(scanRoot(), name);
+        if (!dir.exists()) {
+            Toast.makeText(this, "文件夹已不存在", Toast.LENGTH_SHORT).show();
+            reloadAfterFsChange();
+            return;
+        }
+
+        Song current = currentSongOrNull();
+        if (current != null && name.equals(current.folder)) {
+            stopPlayer();
+            nowPlaying.setText("未播放");
+            nowMeta.setText("");
+            playingIndex = -1;
+            playQueue = Collections.emptyList();
+            clearLyrics();
+            updatePlayButton();
+        }
+
+        if (mode == Mode.SONGS && name.equals(currentFolder)) {
+            showFolders();
+        }
+
+        List<String> paths = new ArrayList<>();
+        collectAllFiles(dir, paths);
+        boolean ok = deleteRecursive(dir);
+
+        if (!paths.isEmpty()) {
+            MediaScannerConnection.scanFile(this, paths.toArray(new String[0]), null,
+                    (path, uri) -> runOnUiThread(this::reloadAfterFsChange));
+        } else {
+            reloadAfterFsChange();
+        }
+        Toast.makeText(this, ok ? "已删除：" + name : "删除失败", Toast.LENGTH_SHORT).show();
+    }
+
+    private static void collectAllFiles(File dir, List<String> out) {
+        if (dir == null || !dir.exists()) return;
+        File[] kids = dir.listFiles();
+        if (kids == null) return;
+        for (File k : kids) {
+            if (k.isDirectory()) collectAllFiles(k, out);
+            else out.add(k.getAbsolutePath());
+        }
+    }
+
+    private static boolean deleteRecursive(File f) {
+        if (f == null) return true;
+        if (f.isDirectory()) {
+            File[] kids = f.listFiles();
+            if (kids != null) {
+                for (File k : kids) deleteRecursive(k);
+            }
+        }
+        return f.delete();
+    }
+
+    private void promptNewFolder() {
+        int dp = (int) getResources().getDisplayMetrics().density;
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT);
+        input.setHint("文件夹名");
+        input.setTextColor(Color.parseColor("#FFF2F0EC"));
+        input.setHintTextColor(Color.parseColor("#FF6B6B6B"));
+
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(16 * dp, 8 * dp, 16 * dp, 0);
+        wrap.addView(input, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        new AlertDialog.Builder(this)
+                .setTitle("新建文件夹")
+                .setMessage("在 " + STORAGE_LABEL + "/" + scanRootDir + "/ 下创建新文件夹，之后可以把音乐放进去。")
+                .setView(wrap)
+                .setPositiveButton("创建", (d, w) -> {
+                    String name = input.getText().toString().trim();
+                    if (name.isEmpty()) return;
+                    if (name.contains("/") || name.contains("\\")
+                            || name.contains(":") || name.contains("*")
+                            || name.contains("?")) {
+                        Toast.makeText(this, "名称不能含 / \\ : * ? 等符号",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    createFolder(name);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void createFolder(String name) {
+        if (!hasAllFilesAccess()) {
+            Toast.makeText(this, "需要文件访问权限", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        File musicDir = scanRoot();
+        if (!musicDir.exists()) musicDir.mkdirs();
+        File dir = new File(musicDir, name);
+        if (dir.exists()) {
+            Toast.makeText(this, "已存在同名文件夹", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!dir.mkdirs()) {
+            Toast.makeText(this, "创建失败", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        folders.computeIfAbsent(name, k -> new ArrayList<>());
+        folderNames.clear();
+        folderNames.addAll(folders.keySet());
+        refreshCurrentView();
+        Toast.makeText(this, "已创建：" + name, Toast.LENGTH_SHORT).show();
+    }
+
     private void writeClassificationToSidecars(Map<String, Set<String>> results) {
         if (!hasAllFilesAccess()) return;
         for (Song s : songByPath.values()) {
@@ -1188,6 +1696,30 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         classifierPool = null;
+
+        SharedPreferences sp = Providers.prefs(this);
+        boolean rescanAll = Providers.takeRescanAllPending(sp);
+        boolean rescanPending = Providers.takeRescanPending(sp);
+
+        String latestDir = Providers.getScanDir(sp);
+        boolean dirChanged = !latestDir.equals(scanRootDir);
+        if (dirChanged) {
+            scanRootDir = latestDir;
+        }
+
+        if (rescanAll) {
+            if (hasPermission()) {
+                if (songByPath.isEmpty() || dirChanged) loadSongs();
+                invalidateClassificationsAndRescan();
+            }
+            return;
+        }
+
+        if (dirChanged && hasPermission()) {
+            loadAndShow();
+            return;
+        }
+
         if (hasAllFilesAccess() && sidecarByPath.isEmpty() && !songByPath.isEmpty()) {
             for (Song s : songByPath.values()) {
                 File sf = Sidecar.sidecarFor(s.path);
@@ -1195,6 +1727,11 @@ public class MainActivity extends AppCompatActivity {
                     sidecarByPath.put(s.path, Sidecar.read(sf));
                 }
             }
+            refreshCurrentView();
+        }
+
+        if (rescanPending && hasPermission()) {
+            loadSongs();
             refreshCurrentView();
         }
         maybeStartClassifyScan();

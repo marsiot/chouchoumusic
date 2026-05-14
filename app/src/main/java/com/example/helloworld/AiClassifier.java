@@ -29,7 +29,19 @@ public class AiClassifier {
     private static final String TAG = "AiClassifier";
 
     public static final List<String> BUILTIN_SCENES = Arrays.asList(
-            "跑步", "散步", "专注", "冥想", "健身", "睡前");
+            "跑步", "冥想");
+
+    private static final Map<String, String> SCENE_DESCRIPTIONS;
+    static {
+        Map<String, String> m = new HashMap<>();
+        m.put("跑步", "节奏快有动感（BPM 130+）");
+        m.put("散步", "节奏中等放松");
+        m.put("专注", "安静柔和或纯音乐不抢戏");
+        m.put("冥想", "极慢氛围 / 纯乐");
+        m.put("健身", "高能量节奏强力量感");
+        m.put("睡前", "温柔安静助眠");
+        SCENE_DESCRIPTIONS = Collections.unmodifiableMap(m);
+    }
 
     public enum Provider {
         ZHIPU("智谱 GLM-4-Flash", "免费",
@@ -194,11 +206,19 @@ public class AiClassifier {
             sceneList.append(sceneNames.get(i));
         }
 
+        StringBuilder descLine = new StringBuilder();
         StringBuilder customHint = new StringBuilder();
         for (String s : sceneNames) {
-            if (!BUILTIN_SCENES.contains(s)) {
-                if (customHint.length() == 0) customHint.append("\n额外的自定义场景（根据场景名常识判断）：");
-                else customHint.append("、");
+            String desc = SCENE_DESCRIPTIONS.get(s);
+            if (desc != null) {
+                if (descLine.length() > 0) descLine.append("，");
+                descLine.append(s).append("=").append(desc);
+            } else {
+                if (customHint.length() == 0) {
+                    customHint.append("\n额外的自定义场景（根据场景名常识判断）：");
+                } else {
+                    customHint.append("、");
+                }
                 customHint.append(s);
             }
         }
@@ -214,12 +234,12 @@ public class AiClassifier {
                 "你是音乐场景分类助手。用户会给你一批歌曲（每行：序号. 歌名 - 歌手），" +
                 "请判断每首适合哪些场景。可选场景（必须只从下列中选）：" +
                 sceneList + "。\n" +
-                "判断标准（针对内置场景）：跑步=节奏快有动感（BPM 130+），散步=节奏中等放松，" +
-                "专注=安静柔和或纯音乐不抢戏，冥想=极慢氛围/纯乐，健身=高能量节奏强力量感，" +
-                "睡前=温柔安静助眠。" + customHint + "\n" +
+                (descLine.length() > 0 ? "判断标准：" + descLine + "。" : "") +
+                customHint + "\n" +
                 "每首可以多选（一般 1-3 个）。如果你完全不熟这首歌，宁可空数组也不要乱猜。\n" +
                 "只输出一个 JSON 对象，严格遵循格式：" +
-                "{\"r\":[{\"i\":1,\"s\":[\"跑步\",\"健身\"]},{\"i\":2,\"s\":[]}]}\n" +
+                "{\"r\":[{\"i\":1,\"s\":[\"" + (sceneNames.isEmpty() ? "跑步" : sceneNames.get(0)) +
+                "\"]},{\"i\":2,\"s\":[]}]}\n" +
                 "其中 i 是输入的序号，s 是适合的场景数组。不要输出 markdown 代码块、不要解释，只输出 JSON。");
         messages.put(sys);
 
