@@ -23,6 +23,9 @@ gradle-8.2/
 # Workaround tmpdir (Java AF_UNIX issue with C:\ user temp)
 .gradle-tmp/
 
+# Crash logs from debug_crash.bat
+debug-logs/
+
 # Native build
 .externalNativeBuild/
 .cxx/
