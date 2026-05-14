@@ -558,6 +558,12 @@ public class MainActivity extends AppCompatActivity {
                     showFolders();
                     return;
                 }
+                // On root: if a song is loaded keep it playing in the
+                // background; otherwise exit normally.
+                if (playingIndex >= 0) {
+                    moveTaskToBack(true);
+                    return;
+                }
                 setEnabled(false);
                 getOnBackPressedDispatcher().onBackPressed();
                 setEnabled(true);
@@ -1168,6 +1174,7 @@ public class MainActivity extends AppCompatActivity {
             progressBar.setProgress(0);
             timeCurrent.setText("--:--");
             timeTotal.setText("--:--");
+            PlayerKeepAliveService.stop(this);
             return;
         }
 
@@ -1183,6 +1190,7 @@ public class MainActivity extends AppCompatActivity {
         timeTotal.setText("--:--");
         adapter.setPlayingPath(song.path);
         adapter.setPlayingSource(sourceKind, label);
+        PlayerKeepAliveService.start(this, song.name, label == null ? "" : label);
 
         if (mode == Mode.SONGS && song.folder.equals(currentFolder)) {
             listView.smoothScrollToPosition(position);
@@ -3217,5 +3225,6 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         saveResumeState();
         stopPlayer();
+        PlayerKeepAliveService.stop(this);
     }
 }
