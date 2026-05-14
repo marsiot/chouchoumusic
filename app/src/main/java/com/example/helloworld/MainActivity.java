@@ -1250,13 +1250,27 @@ public class MainActivity extends AppCompatActivity {
         if (playingIndex < 0) return;
         Song s = currentSongOrNull();
         if (s == null) return;
-        if (lyrics.isEmpty()) {
-            Toast.makeText(this, "当前歌曲暂无歌词", Toast.LENGTH_SHORT).show();
-            return;
-        }
         lyricsTitle.setText(s.name);
+        if (lyrics.isEmpty()) {
+            showEmptyLyricsHint();
+        }
         lyricsOverlay.setVisibility(View.VISIBLE);
         if (currentLyricIndex >= 0) scrollLyricToCenter(currentLyricIndex);
+    }
+
+    private void showEmptyLyricsHint() {
+        lyricsContainer.removeAllViews();
+        TextView tv = new TextView(this);
+        tv.setText("暂无歌词\n\n点击右上角搜索图标手动匹配");
+        tv.setTextColor(ContextCompat.getColor(this, R.color.text_tertiary));
+        tv.setTextSize(15f);
+        tv.setGravity(Gravity.CENTER);
+        tv.setLineSpacing(0f, 1.4f);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        tv.setLayoutParams(lp);
+        lyricsContainer.addView(tv);
     }
 
     private void hideLyrics() {
