@@ -29,6 +29,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -83,6 +84,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView sectionPath;
     private TextView sectionTitle;
     private TextView sectionMeta;
+    private View playAllBar;
     private ImageView btnBack;
     private ImageView btnSettings;
     private ListView listView;
@@ -91,6 +93,10 @@ public class MainActivity extends AppCompatActivity {
     private TextView nowMeta;
     private TextView currentLyric;
     private ImageView btnMode, btnPrev, btnPlay, btnNext;
+    private SeekBar progressBar;
+    private TextView timeCurrent;
+    private TextView timeTotal;
+    private boolean seekBarDragging = false;
 
     private View lyricsOverlay;
     private TextView lyricsTitle;
@@ -135,6 +141,7 @@ public class MainActivity extends AppCompatActivity {
     private final Runnable tickRunnable = new Runnable() {
         @Override
         public void run() {
+            tickProgress();
             tickLyrics();
             tickHandler.postDelayed(this, 250);
         }
@@ -188,6 +195,7 @@ public class MainActivity extends AppCompatActivity {
         private final int colorSelected = 0x33C9A876;
         private Set<String> selectedKeys = null;
         private OnMoreClickListener moreListener;
+        private String playingPath;
 
         RowAdapter(Context c) {
             super(c, 0);
@@ -206,6 +214,13 @@ public class MainActivity extends AppCompatActivity {
             this.moreListener = l;
         }
 
+        void setPlayingPath(String path) {
+            if ((path == null && playingPath == null)
+                    || (path != null && path.equals(playingPath))) return;
+            this.playingPath = path;
+            notifyDataSetChanged();
+        }
+
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
             View v = convertView;
@@ -219,13 +234,20 @@ public class MainActivity extends AppCompatActivity {
             ImageView chevron = v.findViewById(R.id.rowChevron);
 
             primary.setText(r.primary);
+            boolean isPlayingRow = r.kind == Row.Kind.SONG && r.key != null
+                    && r.key.equals(playingPath);
             if (r.kind == Row.Kind.EMPTY_HINT) {
                 primary.setTextColor(colorTertiary);
             } else if (r.kind == Row.Kind.ADD_SCENE || r.kind == Row.Kind.ADD_FOLDER) {
                 primary.setTextColor(colorSecondary);
+            } else if (isPlayingRow) {
+                primary.setTextColor(colorAccent);
             } else {
                 primary.setTextColor(r.accent ? colorAccent : colorPrimary);
             }
+            primary.setTypeface(android.graphics.Typeface.DEFAULT,
+                    isPlayingRow ? android.graphics.Typeface.BOLD
+                            : android.graphics.Typeface.NORMAL);
 
             if (r.secondary != null && !r.secondary.isEmpty()) {
                 secondary.setVisibility(View.VISIBLE);
@@ -286,6 +308,8 @@ public class MainActivity extends AppCompatActivity {
         sectionPath = findViewById(R.id.sectionPath);
         sectionTitle = findViewById(R.id.sectionTitle);
         sectionMeta = findViewById(R.id.sectionMeta);
+        playAllBar = findViewById(R.id.playAllBar);
+        playAllBar.setOnClickListener(v -> playAll());
         btnBack = findViewById(R.id.btnBack);
         btnSettings = findViewById(R.id.btnSettings);
         listView = findViewById(R.id.songList);
@@ -297,12 +321,43 @@ public class MainActivity extends AppCompatActivity {
         btnPrev = findViewById(R.id.btnPrev);
         btnPlay = findViewById(R.id.btnPlay);
         btnNext = findViewById(R.id.btnNext);
+        progressBar = findViewById(R.id.progressBar);
+        timeCurrent = findViewById(R.id.timeCurrent);
+        timeTotal = findViewById(R.id.timeTotal);
+        progressBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar sb, int p, boolean fromUser) {
+                if (fromUser && player != null && isPrepared) {
+                    try {
+                        int d = player.getDuration();
+                        if (d > 0) {
+                            timeCurrent.setText(formatMs((int) ((p / 1000f) * d)));
+                        }
+                    } catch (IllegalStateException ignored) {}
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar sb) {
+                seekBarDragging = true;
+            }
+            @Override public void onStopTrackingTouch(SeekBar sb) {
+                seekBarDragging = false;
+                if (player != null && isPrepared) {
+                    try {
+                        int duration = player.getDuration();
+                        if (duration > 0) {
+                            int newPos = (int) ((sb.getProgress() / 1000f) * duration);
+                            player.seekTo(newPos);
+                        }
+                    } catch (IllegalStateException ignored) {}
+                }
+            }
+        });
 
         lyricsOverlay = findViewById(R.id.lyricsOverlay);
         lyricsTitle = findViewById(R.id.lyricsTitle);
         lyricsScroll = findViewById(R.id.lyricsScroll);
         lyricsContainer = findViewById(R.id.lyricsContainer);
         findViewById(R.id.btnCloseLyrics).setOnClickListener(v -> hideLyrics());
+        findViewById(R.id.btnRelyrics).setOnClickListener(v -> showRelyricsDialog());
 
         fetcher = new LyricsFetcher(this);
         classCache = new ClassificationCache(this);
@@ -656,6 +711,7 @@ public class MainActivity extends AppCompatActivity {
         sectionPath.setText(STORAGE_LABEL + "/" + scanRootDir + "/");
         sectionPath.setVisibility(View.VISIBLE);
         sectionTitle.setText("全部");
+        playAllBar.setVisibility(View.GONE);
         updateSectionMeta();
 
         adapter.clear();
@@ -704,6 +760,9 @@ public class MainActivity extends AppCompatActivity {
         sectionPath.setText(STORAGE_LABEL + "/" + scanRootDir + "/" + folder + "/");
         sectionPath.setVisibility(View.VISIBLE);
         sectionTitle.setText(folder);
+        List<Song> folderSongs = folders.get(folder);
+        playAllBar.setVisibility(folderSongs != null && !folderSongs.isEmpty()
+                ? View.VISIBLE : View.GONE);
 
         adapter.clear();
         List<Song> list = folders.get(folder);
@@ -716,6 +775,16 @@ public class MainActivity extends AppCompatActivity {
         updateSectionMeta();
         adapter.notifyDataSetChanged();
         listView.smoothScrollToPosition(0);
+    }
+
+    private void playAll() {
+        if (mode == Mode.SONGS && currentFolder != null) {
+            List<Song> list = folders.get(currentFolder);
+            if (list != null && !list.isEmpty()) play(list, 0, currentFolder);
+        } else if (mode == Mode.SCENE_SONGS && currentScene != null) {
+            List<Song> list = songsForScene(currentScene);
+            if (!list.isEmpty()) play(list, 0, currentScene);
+        }
     }
 
     private void onSceneClicked(String sceneKey) {
@@ -741,6 +810,8 @@ public class MainActivity extends AppCompatActivity {
         sectionPath.setText("智能场景 · AI 标签");
         sectionPath.setVisibility(View.VISIBLE);
         sectionTitle.setText(sceneKey);
+        List<Song> sceneSongs = songsForScene(sceneKey);
+        playAllBar.setVisibility(sceneSongs.isEmpty() ? View.GONE : View.VISIBLE);
 
         List<Song> list = songsForScene(sceneKey);
         adapter.clear();
@@ -772,6 +843,10 @@ public class MainActivity extends AppCompatActivity {
             playQueue = Collections.emptyList();
             clearLyrics();
             updatePlayButton();
+            adapter.setPlayingPath(null);
+            progressBar.setProgress(0);
+            timeCurrent.setText("--:--");
+            timeTotal.setText("--:--");
             return;
         }
 
@@ -781,6 +856,10 @@ public class MainActivity extends AppCompatActivity {
         Song song = queue.get(position);
         nowPlaying.setText(song.name);
         nowMeta.setText(label == null ? "" : label);
+        progressBar.setProgress(0);
+        timeCurrent.setText("00:00");
+        timeTotal.setText("--:--");
+        adapter.setPlayingPath(song.path);
 
         if (mode == Mode.SONGS && song.folder.equals(currentFolder)) {
             listView.smoothScrollToPosition(position);
@@ -809,6 +888,10 @@ public class MainActivity extends AppCompatActivity {
             });
             player.setOnPreparedListener(mp -> {
                 isPrepared = true;
+                try {
+                    int d = mp.getDuration();
+                    timeTotal.setText(d > 0 ? formatMs(d) : "--:--");
+                } catch (IllegalStateException ignored) {}
                 mp.start();
                 updatePlayButton();
                 startTicking();
@@ -913,6 +996,33 @@ public class MainActivity extends AppCompatActivity {
         tickHandler.removeCallbacks(tickRunnable);
     }
 
+    private void tickProgress() {
+        if (player == null || !isPrepared || seekBarDragging) return;
+        try {
+            int duration = player.getDuration();
+            if (duration <= 0) return;
+            int pos = player.getCurrentPosition();
+            int p = (int) ((pos / (float) duration) * 1000);
+            progressBar.setProgress(p);
+            timeCurrent.setText(formatMs(pos));
+            timeTotal.setText(formatMs(duration));
+        } catch (IllegalStateException ignored) {
+        }
+    }
+
+    private static String formatMs(int ms) {
+        if (ms < 0) ms = 0;
+        int seconds = ms / 1000;
+        int min = seconds / 60;
+        int sec = seconds % 60;
+        if (min >= 60) {
+            int hr = min / 60;
+            min = min % 60;
+            return String.format(java.util.Locale.US, "%d:%02d:%02d", hr, min, sec);
+        }
+        return String.format(java.util.Locale.US, "%02d:%02d", min, sec);
+    }
+
     private void tickLyrics() {
         if (player == null || !isPrepared || lyrics.isEmpty()) return;
         long pos;
@@ -978,6 +1088,101 @@ public class MainActivity extends AppCompatActivity {
 
     private void hideLyrics() {
         lyricsOverlay.setVisibility(View.GONE);
+    }
+
+    private void showRelyricsDialog() {
+        Song song = currentSongOrNull();
+        if (song == null) {
+            Toast.makeText(this, "没有正在播放的歌", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] auto = LyricsFetcher.extractTitleArtist(song.name, song.folder);
+
+        int dp = (int) getResources().getDisplayMetrics().density;
+
+        EditText titleInput = new EditText(this);
+        titleInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        titleInput.setHint("歌名");
+        titleInput.setText(auto[0] == null ? "" : auto[0]);
+        titleInput.setSingleLine(true);
+        titleInput.setTextColor(Color.parseColor("#FFF2F0EC"));
+        titleInput.setHintTextColor(Color.parseColor("#FF6B6B6B"));
+
+        EditText artistInput = new EditText(this);
+        artistInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        artistInput.setHint("歌手（可留空）");
+        artistInput.setText(auto[1] == null ? "" : auto[1]);
+        artistInput.setSingleLine(true);
+        artistInput.setTextColor(Color.parseColor("#FFF2F0EC"));
+        artistInput.setHintTextColor(Color.parseColor("#FF6B6B6B"));
+
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(16 * dp, 8 * dp, 16 * dp, 0);
+        wrap.addView(titleInput, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp2.topMargin = 8 * dp;
+        wrap.addView(artistInput, lp2);
+
+        new AlertDialog.Builder(this)
+                .setTitle("重新匹配歌词")
+                .setMessage("修正歌名/歌手后再去网易云搜歌词。新结果会覆盖当前缓存。")
+                .setView(wrap)
+                .setPositiveButton("搜索", (d, w) -> {
+                    String t = titleInput.getText().toString().trim();
+                    String a = artistInput.getText().toString().trim();
+                    if (t.isEmpty()) {
+                        Toast.makeText(this, "歌名不能为空", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    refetchLyrics(song, t, a);
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void refetchLyrics(Song song, String title, String artist) {
+        Toast.makeText(this, "正在搜索…", Toast.LENGTH_SHORT).show();
+        final long myToken = ++lyricsRequestToken;
+        final Song theSong = song;
+        fetcher.fetchOverride(song.name, song.folder, title, artist,
+                (lines, source, error) -> {
+                    if (myToken != lyricsRequestToken) return;
+
+                    if (hasAllFilesAccess()) {
+                        File sf = Sidecar.sidecarFor(theSong.path);
+                        if (sf != null) {
+                            Sidecar.Data sd = sidecarByPath.get(theSong.path);
+                            if (sd == null) sd = Sidecar.read(sf);
+                            sd.lyrics = (lines == null)
+                                    ? new ArrayList<>()
+                                    : new ArrayList<>(lines);
+                            sd.lyricsAttempted = true;
+                            Sidecar.write(sf, sd);
+                            sidecarByPath.put(theSong.path, sd);
+                        }
+                    }
+
+                    if (lines == null || lines.isEmpty()) {
+                        lyrics = Collections.emptyList();
+                        lyricsContainer.removeAllViews();
+                        currentLyric.setText("没找到匹配");
+                        currentLyric.setVisibility(View.VISIBLE);
+                        Toast.makeText(this,
+                                error != null ? "搜索失败：" + error : "没找到匹配的歌词",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    lyrics = lines;
+                    currentLyricIndex = -1;
+                    populateLyricsContainer();
+                    currentLyric.setText("");
+                    currentLyric.setVisibility(View.GONE);
+                    tickLyrics();
+                    Toast.makeText(this, "歌词已更新", Toast.LENGTH_SHORT).show();
+                });
     }
 
     private Song currentSongOrNull() {
@@ -1469,6 +1674,7 @@ public class MainActivity extends AppCompatActivity {
                 playQueue = Collections.emptyList();
                 clearLyrics();
                 updatePlayButton();
+                adapter.setPlayingPath(null);
             }
         }
         MediaScannerConnection.scanFile(this, paths.toArray(new String[0]), null,
@@ -1568,6 +1774,10 @@ public class MainActivity extends AppCompatActivity {
             playQueue = Collections.emptyList();
             clearLyrics();
             updatePlayButton();
+            adapter.setPlayingPath(null);
+            progressBar.setProgress(0);
+            timeCurrent.setText("--:--");
+            timeTotal.setText("--:--");
         }
 
         if (mode == Mode.SONGS && name.equals(currentFolder)) {

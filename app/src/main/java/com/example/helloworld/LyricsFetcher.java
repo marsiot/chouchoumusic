@@ -45,6 +45,47 @@ public class LyricsFetcher {
         if (!cacheDir.exists()) cacheDir.mkdirs();
     }
 
+    public void fetchOverride(String fileName, String folderName,
+                              String overrideTitle, String overrideArtist, Callback cb) {
+        exec.execute(() -> {
+            try {
+                Result r = doFetchOverride(fileName, folderName, overrideTitle, overrideArtist);
+                ui.post(() -> cb.onResult(r.lines, r.source, null));
+            } catch (Exception e) {
+                Log.w(TAG, "fetchOverride failed for " + fileName, e);
+                ui.post(() -> cb.onResult(Collections.emptyList(), null, e.getMessage()));
+            }
+        });
+    }
+
+    private Result doFetchOverride(String fileName, String folderName,
+                                   String title, String artist) throws Exception {
+        String[] auto = extractTitleArtist(fileName, folderName);
+        String cacheKey = sha1(queryKey(auto[0], auto[1]));
+        File cache = new File(cacheDir, cacheKey + ".lrc");
+
+        if (title == null || title.isEmpty()) {
+            return new Result(Collections.emptyList(), null);
+        }
+
+        long songId = searchNeteaseSongId(title, artist);
+        if (songId <= 0) return new Result(Collections.emptyList(), null);
+
+        String lrcText = fetchNeteaseLyric(songId);
+        if (lrcText == null || lrcText.isEmpty()) {
+            return new Result(Collections.emptyList(), null);
+        }
+
+        File tmp = new File(cacheDir, cacheKey + ".lrc.tmp");
+        try (java.io.FileOutputStream fos = new java.io.FileOutputStream(tmp)) {
+            fos.write(lrcText.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
+        if (cache.exists()) cache.delete();
+        tmp.renameTo(cache);
+
+        return new Result(LrcParser.parseText(lrcText), "网易云");
+    }
+
     public void fetch(String fileName, String folderName, Callback cb) {
         exec.execute(() -> {
             try {

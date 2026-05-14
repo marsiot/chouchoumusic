@@ -92,6 +92,38 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/playAllBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="?android:attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="24dp"
+            android:paddingTop="14dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="14dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:src="@drawable/ic_play"
+                android:tint="@color/accent" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_weight="1"
+                android:text="播放全部"
+                android:textColor="@color/accent"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
         <!-- Main list -->
         <ListView
             android:id="@+id/songList"
@@ -108,10 +140,62 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="@color/bg_elevated"
+            android:orientation="vertical">
+
+            <SeekBar
+                android:id="@+id/progressBar"
+                android:layout_width="match_parent"
+                android:layout_height="20dp"
+                android:max="1000"
+                android:maxHeight="2dp"
+                android:minHeight="2dp"
+                android:paddingStart="0dp"
+                android:paddingEnd="0dp"
+                android:progress="0"
+                android:progressBackgroundTint="@color/text_tertiary"
+                android:progressTint="@color/accent"
+                android:splitTrack="false"
+                android:thumbTint="@color/accent" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:paddingStart="16dp"
+                android:paddingTop="2dp"
+                android:paddingEnd="16dp">
+
+                <TextView
+                    android:id="@+id/timeCurrent"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:text="--:--"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="10sp" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1" />
+
+                <TextView
+                    android:id="@+id/timeTotal"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:text="--:--"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="10sp" />
+            </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingStart="24dp"
-            android:paddingTop="12dp"
+            android:paddingTop="14dp"
             android:paddingEnd="14dp"
             android:paddingBottom="14dp">
 
@@ -190,6 +274,7 @@
                 android:padding="8dp"
                 android:src="@drawable/ic_next" />
         </LinearLayout>
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Full screen lyrics overlay -->
@@ -238,9 +323,14 @@
                     android:textSize="14sp"
                     android:textStyle="bold" />
 
-                <View
+                <ImageView
+                    android:id="@+id/btnRelyrics"
                     android:layout_width="40dp"
-                    android:layout_height="40dp" />
+                    android:layout_height="40dp"
+                    android:background="?android:attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="重新匹配歌词"
+                    android:padding="9dp"
+                    android:src="@drawable/ic_search" />
             </LinearLayout>
 
             <ScrollView
