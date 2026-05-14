@@ -44,29 +44,30 @@
         android:layout_height="0.5dp"
         android:background="@color/divider" />
 
-    <LinearLayout
-        android:id="@+id/actionEditTags"
+    <TextView
+        android:id="@+id/sceneTagsLabel"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:background="?android:attr/selectableItemBackground"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
+        android:layout_height="wrap_content"
         android:paddingStart="24dp"
-        android:paddingEnd="24dp">
+        android:paddingTop="14dp"
+        android:paddingEnd="24dp"
+        android:paddingBottom="2dp"
+        android:text="场景标签"
+        android:textColor="@color/text_secondary"
+        android:textSize="11sp" />
 
-        <ImageView
-            android:layout_width="22dp"
-            android:layout_height="22dp"
-            android:src="@drawable/ic_tag" />
+    <LinearLayout
+        android:id="@+id/sceneTagsContainer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="20dp"
-            android:text="编辑场景标签"
-            android:textColor="@color/text_primary"
-            android:textSize="15sp" />
-    </LinearLayout>
+    <View
+        android:id="@+id/sceneTagsDivider"
+        android:layout_width="match_parent"
+        android:layout_height="0.5dp"
+        android:layout_marginTop="6dp"
+        android:background="@color/divider" />
 
     <LinearLayout
         android:id="@+id/actionRename"

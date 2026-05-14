@@ -20,6 +20,8 @@ public class Providers {
 
     public static final String KEY_RESCAN_PENDING = "pending_rescan";
     public static final String KEY_RESCAN_ALL_PENDING = "pending_rescan_all";
+    public static final String KEY_SCENE_ORDER_PREFIX = "scene_order_";
+    public static final String KEY_FOLDER_ORDER_PREFIX = "folder_order_";
 
     private Providers() {}
 
@@ -65,6 +67,48 @@ public class Providers {
         while (s.startsWith("/")) s = s.substring(1);
         while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
         return s.isEmpty() ? DEFAULT_SCAN_DIR : s;
+    }
+
+    public static List<String> getSceneOrder(SharedPreferences sp, String scene) {
+        if (scene == null) return new ArrayList<>();
+        String json = sp.getString(KEY_SCENE_ORDER_PREFIX + scene, "[]");
+        List<String> out = new ArrayList<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                String s = arr.optString(i, null);
+                if (s != null) out.add(s);
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    public static void setSceneOrder(SharedPreferences sp, String scene, List<String> order) {
+        if (scene == null) return;
+        org.json.JSONArray arr = new org.json.JSONArray(order == null ? new ArrayList<>() : order);
+        sp.edit().putString(KEY_SCENE_ORDER_PREFIX + scene, arr.toString()).apply();
+    }
+
+    public static List<String> getFolderOrder(SharedPreferences sp, String folder) {
+        if (folder == null) return new ArrayList<>();
+        String json = sp.getString(KEY_FOLDER_ORDER_PREFIX + folder, "[]");
+        List<String> out = new ArrayList<>();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(json);
+            for (int i = 0; i < arr.length(); i++) {
+                String s = arr.optString(i, null);
+                if (s != null) out.add(s);
+            }
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+
+    public static void setFolderOrder(SharedPreferences sp, String folder, List<String> order) {
+        if (folder == null) return;
+        org.json.JSONArray arr = new org.json.JSONArray(order == null ? new ArrayList<>() : order);
+        sp.edit().putString(KEY_FOLDER_ORDER_PREFIX + folder, arr.toString()).apply();
     }
 
     public static boolean takeRescanPending(SharedPreferences sp) {

@@ -27,7 +27,6 @@ import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -38,6 +37,9 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.recyclerview.widget.ItemTouchHelper;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.bottomsheet.BottomSheetBehavior;
 import com.google.android.material.bottomsheet.BottomSheetDialog;
@@ -87,7 +89,7 @@ public class MainActivity extends AppCompatActivity {
     private View playAllBar;
     private ImageView btnBack;
     private ImageView btnSettings;
-    private ListView listView;
+    private RecyclerView listView;
     private LinearLayout miniPlayer;
     private TextView nowPlaying;
     private TextView nowMeta;
@@ -186,32 +188,62 @@ public class MainActivity extends AppCompatActivity {
     }
 
     interface OnMoreClickListener { void onMore(Row row); }
+    interface OnRowClickListener { void onClick(Row row, int position); }
+    interface OnRowLongClickListener { boolean onLongClick(Row row, int position); }
 
-    private static class RowAdapter extends ArrayAdapter<Row> {
+    private static class RowAdapter extends RecyclerView.Adapter<RowAdapter.VH> {
         private final int colorPrimary;
         private final int colorAccent;
         private final int colorSecondary;
         private final int colorTertiary;
         private final int colorSelected = 0x33C9A876;
+        private final List<Row> items = new ArrayList<>();
         private Set<String> selectedKeys = null;
         private OnMoreClickListener moreListener;
+        private OnRowClickListener clickListener;
+        private OnRowLongClickListener longClickListener;
         private String playingPath;
 
         RowAdapter(Context c) {
-            super(c, 0);
             colorPrimary = ContextCompat.getColor(c, R.color.text_primary);
             colorAccent = ContextCompat.getColor(c, R.color.accent);
             colorSecondary = ContextCompat.getColor(c, R.color.text_secondary);
             colorTertiary = ContextCompat.getColor(c, R.color.text_tertiary);
+            setHasStableIds(false);
         }
+
+        // ArrayAdapter-compatible API so callers don't have to change much
+        void clear() {
+            int n = items.size();
+            items.clear();
+            if (n > 0) notifyItemRangeRemoved(0, n);
+        }
+
+        void add(Row r) {
+            items.add(r);
+            notifyItemInserted(items.size() - 1);
+        }
+
+        Row getItem(int pos) {
+            return (pos < 0 || pos >= items.size()) ? null : items.get(pos);
+        }
+
+        int size() { return items.size(); }
+
+        void move(int from, int to) {
+            if (from < 0 || to < 0 || from >= items.size() || to >= items.size()) return;
+            Row moved = items.remove(from);
+            items.add(to, moved);
+            notifyItemMoved(from, to);
+        }
+
+        void setOnRowClickListener(OnRowClickListener l) { clickListener = l; }
+        void setOnRowLongClickListener(OnRowLongClickListener l) { longClickListener = l; }
+        void setOnMoreClickListener(OnMoreClickListener l) { moreListener = l; }
 
         void setSelectedKeys(Set<String> keys) {
             this.selectedKeys = keys;
             notifyDataSetChanged();
-        }
-
-        void setOnMoreClickListener(OnMoreClickListener l) {
-            this.moreListener = l;
         }
 
         void setPlayingPath(String path) {
@@ -222,80 +254,115 @@ public class MainActivity extends AppCompatActivity {
         }
 
         @Override
-        public View getView(int position, View convertView, ViewGroup parent) {
-            View v = convertView;
-            if (v == null) {
-                v = LayoutInflater.from(getContext()).inflate(R.layout.item_row, parent, false);
-            }
-            Row r = getItem(position);
-            TextView primary = v.findViewById(R.id.rowPrimary);
-            TextView secondary = v.findViewById(R.id.rowSecondary);
-            TextView meta = v.findViewById(R.id.rowMeta);
-            ImageView chevron = v.findViewById(R.id.rowChevron);
+        public VH onCreateViewHolder(ViewGroup parent, int viewType) {
+            View v = LayoutInflater.from(parent.getContext())
+                    .inflate(R.layout.item_row, parent, false);
+            return new VH(v);
+        }
 
-            primary.setText(r.primary);
+        @Override
+        public void onBindViewHolder(VH h, int position) {
+            Row r = items.get(position);
+
+            h.primary.setText(r.primary);
             boolean isPlayingRow = r.kind == Row.Kind.SONG && r.key != null
                     && r.key.equals(playingPath);
             if (r.kind == Row.Kind.EMPTY_HINT) {
-                primary.setTextColor(colorTertiary);
+                h.primary.setTextColor(colorTertiary);
             } else if (r.kind == Row.Kind.ADD_SCENE || r.kind == Row.Kind.ADD_FOLDER) {
-                primary.setTextColor(colorSecondary);
+                h.primary.setTextColor(colorSecondary);
             } else if (isPlayingRow) {
-                primary.setTextColor(colorAccent);
+                h.primary.setTextColor(colorAccent);
             } else {
-                primary.setTextColor(r.accent ? colorAccent : colorPrimary);
+                h.primary.setTextColor(r.accent ? colorAccent : colorPrimary);
             }
-            primary.setTypeface(android.graphics.Typeface.DEFAULT,
+            h.primary.setTypeface(android.graphics.Typeface.DEFAULT,
                     isPlayingRow ? android.graphics.Typeface.BOLD
                             : android.graphics.Typeface.NORMAL);
 
             if (r.secondary != null && !r.secondary.isEmpty()) {
-                secondary.setVisibility(View.VISIBLE);
-                secondary.setText(r.secondary);
+                h.secondary.setVisibility(View.VISIBLE);
+                h.secondary.setText(r.secondary);
             } else {
-                secondary.setVisibility(View.GONE);
+                h.secondary.setVisibility(View.GONE);
             }
 
             if (r.meta != null && !r.meta.isEmpty()) {
-                meta.setVisibility(View.VISIBLE);
-                meta.setText(r.meta);
+                h.meta.setVisibility(View.VISIBLE);
+                h.meta.setText(r.meta);
             } else {
-                meta.setVisibility(View.GONE);
+                h.meta.setVisibility(View.GONE);
             }
 
-            chevron.setVisibility(r.showChevron ? View.VISIBLE : View.INVISIBLE);
+            h.chevron.setVisibility(r.showChevron ? View.VISIBLE : View.INVISIBLE);
 
-            ImageView more = v.findViewById(R.id.rowMore);
-            ImageView check = v.findViewById(R.id.rowCheck);
             boolean inSelectionMode = selectedKeys != null;
             boolean isSongRow = r.kind == Row.Kind.SONG && r.song != null;
             boolean isFolderRow = r.kind == Row.Kind.FOLDER;
 
             if (isSongRow && inSelectionMode) {
-                more.setVisibility(View.GONE);
-                more.setOnClickListener(null);
-                check.setVisibility(View.VISIBLE);
+                h.more.setVisibility(View.GONE);
+                h.more.setOnClickListener(null);
+                h.check.setVisibility(View.VISIBLE);
                 boolean selected = r.key != null && selectedKeys.contains(r.key);
-                check.setImageResource(selected
+                h.check.setImageResource(selected
                         ? R.drawable.ic_check_on : R.drawable.ic_check_off);
             } else if (isSongRow || isFolderRow) {
-                check.setVisibility(View.GONE);
-                more.setVisibility(View.VISIBLE);
-                final Row rRef = r;
-                more.setOnClickListener(view -> {
-                    if (moreListener != null) moreListener.onMore(rRef);
+                h.check.setVisibility(View.GONE);
+                h.more.setVisibility(View.VISIBLE);
+                final VH vh = h;
+                h.more.setOnClickListener(view -> {
+                    int p = vh.getBindingAdapterPosition();
+                    if (p >= 0 && moreListener != null) {
+                        moreListener.onMore(items.get(p));
+                    }
                 });
             } else {
-                check.setVisibility(View.GONE);
-                more.setVisibility(View.GONE);
-                more.setOnClickListener(null);
+                h.check.setVisibility(View.GONE);
+                h.more.setVisibility(View.GONE);
+                h.more.setOnClickListener(null);
             }
 
             boolean highlight = isSongRow && inSelectionMode
                     && r.key != null && selectedKeys.contains(r.key);
-            v.setBackgroundColor(highlight ? colorSelected : 0);
+            h.itemView.setBackgroundColor(highlight ? colorSelected : 0);
 
-            return v;
+            final VH vhRef = h;
+            h.itemView.setOnClickListener(view -> {
+                int p = vhRef.getBindingAdapterPosition();
+                if (p >= 0 && clickListener != null) {
+                    clickListener.onClick(items.get(p), p);
+                }
+            });
+            h.itemView.setOnLongClickListener(view -> {
+                int p = vhRef.getBindingAdapterPosition();
+                if (p >= 0 && longClickListener != null) {
+                    return longClickListener.onLongClick(items.get(p), p);
+                }
+                return false;
+            });
+        }
+
+        @Override
+        public int getItemCount() { return items.size(); }
+
+        static class VH extends RecyclerView.ViewHolder {
+            final TextView primary;
+            final TextView secondary;
+            final TextView meta;
+            final ImageView chevron;
+            final ImageView more;
+            final ImageView check;
+
+            VH(View v) {
+                super(v);
+                primary = v.findViewById(R.id.rowPrimary);
+                secondary = v.findViewById(R.id.rowSecondary);
+                meta = v.findViewById(R.id.rowMeta);
+                chevron = v.findViewById(R.id.rowChevron);
+                more = v.findViewById(R.id.rowMore);
+                check = v.findViewById(R.id.rowCheck);
+            }
         }
     }
 
@@ -373,9 +440,9 @@ public class MainActivity extends AppCompatActivity {
                 confirmDeleteFolder(r.key);
             }
         });
+        listView.setLayoutManager(new LinearLayoutManager(this));
         listView.setAdapter(adapter);
-        listView.setOnItemClickListener((parent, view, position, id) -> {
-            Row r = adapter.getItem(position);
+        adapter.setOnRowClickListener((r, position) -> {
             if (r == null) return;
             if (selectionMode) {
                 if (r.kind == Row.Kind.SONG && r.song != null) toggleSelection(r.song);
@@ -404,25 +471,25 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        listView.setOnItemLongClickListener((parent, view, position, id) -> {
-            Row r = adapter.getItem(position);
+        adapter.setOnRowLongClickListener((r, position) -> {
             if (r == null) return false;
             if (r.kind == Row.Kind.SCENE && !AiClassifier.BUILTIN_SCENES.contains(r.key)) {
                 promptDeleteScene(r.key);
                 return true;
             }
-            if (r.kind == Row.Kind.SONG && r.song != null && !selectionMode) {
-                showSongOptions(r.song);
-                return true;
-            }
+            // SONG rows: long-press in SONGS mode = drag (ItemTouchHelper handles it);
+            // in other modes do nothing (use ⋯ for actions).
             return false;
         });
+
+        attachDragReorder();
 
         updateTopBar();
 
         // Tap on the text area of mini player → expand lyrics
         miniPlayer.findViewById(R.id.nowPlaying).setOnClickListener(v -> tryShowLyrics());
         miniPlayer.findViewById(R.id.nowMeta).setOnClickListener(v -> tryShowLyrics());
+        miniPlayer.findViewById(R.id.currentLyric).setOnClickListener(v -> tryShowLyrics());
 
         btnMode.setOnClickListener(v -> cyclePlayMode());
         btnPrev.setOnClickListener(v -> playPrev());
@@ -601,6 +668,24 @@ public class MainActivity extends AppCompatActivity {
 
         folderNames.addAll(folders.keySet());
 
+        SharedPreferences spOrder = Providers.prefs(this);
+        for (String folder : folderNames) {
+            List<Song> list = folders.get(folder);
+            if (list == null || list.size() <= 1) continue;
+            List<String> savedOrder = Providers.getFolderOrder(spOrder, folder);
+            if (savedOrder.isEmpty()) continue;
+            LinkedHashMap<String, Song> byPath = new LinkedHashMap<>();
+            for (Song s : list) byPath.put(s.path, s);
+            List<Song> reordered = new ArrayList<>(list.size());
+            for (String p : savedOrder) {
+                Song s = byPath.remove(p);
+                if (s != null) reordered.add(s);
+            }
+            reordered.addAll(byPath.values());
+            list.clear();
+            list.addAll(reordered);
+        }
+
         if (hasAllFilesAccess()) {
             for (Song s : songByPath.values()) {
                 File sf = Sidecar.sidecarFor(s.path);
@@ -687,10 +772,18 @@ public class MainActivity extends AppCompatActivity {
 
     private List<Song> songsForScene(String sceneKey) {
         if (sceneKey == null) return Collections.emptyList();
-        List<Song> out = new ArrayList<>();
+        LinkedHashMap<String, Song> tagged = new LinkedHashMap<>();
         for (Song s : songByPath.values()) {
-            if (scenesForSong(s).contains(sceneKey)) out.add(s);
+            if (scenesForSong(s).contains(sceneKey)) tagged.put(s.path, s);
         }
+        if (tagged.isEmpty()) return Collections.emptyList();
+        List<String> customOrder = Providers.getSceneOrder(Providers.prefs(this), sceneKey);
+        List<Song> out = new ArrayList<>(tagged.size());
+        for (String p : customOrder) {
+            Song s = tagged.remove(p);
+            if (s != null) out.add(s);
+        }
+        out.addAll(tagged.values());
         return out;
     }
 
@@ -775,6 +868,86 @@ public class MainActivity extends AppCompatActivity {
         updateSectionMeta();
         adapter.notifyDataSetChanged();
         listView.smoothScrollToPosition(0);
+    }
+
+    private void attachDragReorder() {
+        ItemTouchHelper helper = new ItemTouchHelper(new ItemTouchHelper.Callback() {
+            @Override
+            public int getMovementFlags(RecyclerView rv, RecyclerView.ViewHolder vh) {
+                if (selectionMode) return 0;
+                if (mode != Mode.SONGS && mode != Mode.SCENE_SONGS) return 0;
+                int p = vh.getBindingAdapterPosition();
+                Row r = adapter.getItem(p);
+                if (r == null || r.kind != Row.Kind.SONG) return 0;
+                return makeMovementFlags(
+                        ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0);
+            }
+
+            @Override
+            public boolean onMove(RecyclerView rv,
+                                  RecyclerView.ViewHolder from,
+                                  RecyclerView.ViewHolder to) {
+                int fromPos = from.getBindingAdapterPosition();
+                int toPos = to.getBindingAdapterPosition();
+                if (fromPos < 0 || toPos < 0 || fromPos == toPos) return false;
+                Row r = adapter.getItem(fromPos);
+                if (r == null || r.kind != Row.Kind.SONG) return false;
+
+                if (mode == Mode.SONGS && currentFolder != null) {
+                    adapter.move(fromPos, toPos);
+                    moveSongInFolderList(currentFolder, fromPos, toPos);
+                    return true;
+                }
+                if (mode == Mode.SCENE_SONGS && currentScene != null) {
+                    adapter.move(fromPos, toPos);
+                    moveSongInSceneList(currentScene, fromPos, toPos);
+                    return true;
+                }
+                return false;
+            }
+
+            @Override
+            public void onSwiped(RecyclerView.ViewHolder vh, int direction) {}
+
+            @Override
+            public boolean isLongPressDragEnabled() { return true; }
+        });
+        helper.attachToRecyclerView(listView);
+    }
+
+    private void moveSongInFolderList(String folder, int from, int to) {
+        List<Song> list = folders.get(folder);
+        if (list == null) return;
+        if (from < 0 || to < 0 || from >= list.size() || to >= list.size()) return;
+        Song playingBefore = (playQueue == list
+                && playingIndex >= 0 && playingIndex < list.size())
+                ? list.get(playingIndex) : null;
+        Song moved = list.remove(from);
+        list.add(to, moved);
+        if (playingBefore != null) {
+            int newIdx = list.indexOf(playingBefore);
+            if (newIdx >= 0) playingIndex = newIdx;
+        }
+        List<String> paths = new ArrayList<>(list.size());
+        for (Song s : list) paths.add(s.path);
+        Providers.setFolderOrder(Providers.prefs(this), folder, paths);
+    }
+
+    private void moveSongInSceneList(String scene, int from, int to) {
+        List<Song> current = new ArrayList<>(songsForScene(scene));
+        if (from < 0 || to < 0 || from >= current.size() || to >= current.size()) return;
+        Song playingSong = (playingIndex >= 0 && playingIndex < playQueue.size())
+                ? playQueue.get(playingIndex) : null;
+        Song moved = current.remove(from);
+        current.add(to, moved);
+        List<String> paths = new ArrayList<>(current.size());
+        for (Song s : current) paths.add(s.path);
+        Providers.setSceneOrder(Providers.prefs(this), scene, paths);
+        if (playingSong != null && scene.equals(playSourceLabel)) {
+            playQueue = current;
+            int newIdx = current.indexOf(playingSong);
+            if (newIdx >= 0) playingIndex = newIdx;
+        }
     }
 
     private void playAll() {
@@ -1467,10 +1640,21 @@ public class MainActivity extends AppCompatActivity {
         ((TextView) content.findViewById(R.id.sheetTitle)).setText(song.name);
         ((TextView) content.findViewById(R.id.sheetSubtitle)).setText(song.folder);
 
-        content.findViewById(R.id.actionEditTags).setOnClickListener(v -> {
-            sheet.dismiss();
-            showTagEditor(song);
-        });
+        LinearLayout sceneTagsContainer = content.findViewById(R.id.sceneTagsContainer);
+        View sceneTagsLabel = content.findViewById(R.id.sceneTagsLabel);
+        View sceneTagsDivider = content.findViewById(R.id.sceneTagsDivider);
+        List<String> allScenes = allSceneKeys();
+        if (allScenes.isEmpty()) {
+            sceneTagsLabel.setVisibility(View.GONE);
+            sceneTagsContainer.setVisibility(View.GONE);
+            sceneTagsDivider.setVisibility(View.GONE);
+        } else {
+            LinkedHashSet<String> current = new LinkedHashSet<>(scenesForSong(song));
+            for (String key : allScenes) {
+                sceneTagsContainer.addView(buildSceneTagRow(song, key, current));
+            }
+        }
+
         content.findViewById(R.id.actionRename).setOnClickListener(v -> {
             sheet.dismiss();
             promptRename(song);
@@ -1501,6 +1685,47 @@ public class MainActivity extends AppCompatActivity {
         sheet.show();
     }
 
+    private View buildSceneTagRow(Song song, String sceneKey, LinkedHashSet<String> current) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        int padH = (int) (24 * getResources().getDisplayMetrics().density);
+        row.setPadding(padH, 0, padH, 0);
+        row.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (int) (48 * getResources().getDisplayMetrics().density)));
+        android.util.TypedValue tv = new android.util.TypedValue();
+        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, tv, true);
+        row.setBackgroundResource(tv.resourceId);
+        row.setClickable(true);
+        row.setFocusable(true);
+
+        TextView name = new TextView(this);
+        name.setText(sceneKey);
+        name.setTextColor(ContextCompat.getColor(this, R.color.text_primary));
+        name.setTextSize(15);
+        LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        row.addView(name, nameLp);
+
+        ImageView check = new ImageView(this);
+        int sz = (int) (22 * getResources().getDisplayMetrics().density);
+        LinearLayout.LayoutParams checkLp = new LinearLayout.LayoutParams(sz, sz);
+        row.addView(check, checkLp);
+
+        final boolean[] on = { current.contains(sceneKey) };
+        check.setImageResource(on[0] ? R.drawable.ic_check_on : R.drawable.ic_check_off);
+
+        row.setOnClickListener(v -> {
+            on[0] = !on[0];
+            check.setImageResource(on[0] ? R.drawable.ic_check_on : R.drawable.ic_check_off);
+            if (on[0]) current.add(sceneKey);
+            else current.remove(sceneKey);
+            applyManualTags(song, current, false);
+        });
+        return row;
+    }
+
     private void showTagEditor(Song song) {
         List<String> scenes = allSceneKeys();
         if (scenes.isEmpty()) {
@@ -1528,6 +1753,10 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void applyManualTags(Song song, Set<String> tags) {
+        applyManualTags(song, tags, true);
+    }
+
+    private void applyManualTags(Song song, Set<String> tags, boolean toast) {
         if (hasAllFilesAccess()) {
             File sf = Sidecar.sidecarFor(song.path);
             if (sf != null) {
@@ -1547,7 +1776,7 @@ public class MainActivity extends AppCompatActivity {
         }
         classCache.put(queryKeyForSong(song), tags);
         refreshCurrentView();
-        Toast.makeText(this, "标签已更新", Toast.LENGTH_SHORT).show();
+        if (toast) Toast.makeText(this, "标签已更新", Toast.LENGTH_SHORT).show();
     }
 
     private void promptRename(Song song) {
