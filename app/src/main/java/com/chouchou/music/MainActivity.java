@@ -23,6 +23,7 @@ import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -38,6 +39,9 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import android.support.v4.media.MediaMetadataCompat;
+import android.support.v4.media.session.MediaSessionCompat;
+import android.support.v4.media.session.PlaybackStateCompat;
 import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -59,6 +63,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.TreeMap;
 
 public class MainActivity extends AppCompatActivity {
@@ -74,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
     private final List<String> customScenes = new ArrayList<>();
     private final Set<String> deletedBuiltins = new HashSet<>();
     private OnBackPressedCallback backCallback;
+    private MediaSessionCompat mediaSession;
     private String scanRootDir = Providers.DEFAULT_SCAN_DIR;
 
     private enum Mode { FOLDERS, SONGS, SCENE_SONGS }
@@ -416,6 +422,43 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        mediaSession = new MediaSessionCompat(this, "ChouchouMusic");
+        mediaSession.setCallback(new MediaSessionCompat.Callback() {
+            @Override
+            public void onPlay() {
+                if (player != null && isPrepared && !player.isPlaying()) {
+                    togglePlayPause();
+                } else if (playingIndex < 0) {
+                    startFromDefault();
+                }
+            }
+            @Override
+            public void onPause() {
+                if (player != null && isPrepared && player.isPlaying()) {
+                    togglePlayPause();
+                }
+            }
+            @Override
+            public void onSkipToNext() { playNext(true); }
+            @Override
+            public void onSkipToPrevious() { playPrev(); }
+            @Override
+            public void onStop() {
+                if (player != null && isPrepared && player.isPlaying()) {
+                    togglePlayPause();
+                }
+            }
+            @Override
+            public void onSeekTo(long pos) {
+                if (player != null && isPrepared) {
+                    try { player.seekTo((int) pos); } catch (IllegalStateException ignored) {}
+                    updateMediaSessionState();
+                }
+            }
+        });
+        mediaSession.setActive(true);
+        updateMediaSessionState();
 
         topTitle = findViewById(R.id.topTitle);
         sectionPath = findViewById(R.id.sectionPath);
@@ -1233,6 +1276,7 @@ public class MainActivity extends AppCompatActivity {
                         }
                     } catch (IllegalStateException ignored) {}
                 }
+                updateMediaSessionMetadata(song, label, d);
                 if (autoStart) {
                     mp.start();
                     startTicking();
@@ -1425,6 +1469,7 @@ public class MainActivity extends AppCompatActivity {
             showEmptyLyricsHint();
         }
         lyricsOverlay.setVisibility(View.VISIBLE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (currentLyricIndex >= 0) scrollLyricToCenter(currentLyricIndex);
     }
 
@@ -1445,6 +1490,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void hideLyrics() {
         lyricsOverlay.setVisibility(View.GONE);
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
 
     private void showRelyricsDialog() {
@@ -1646,6 +1692,53 @@ public class MainActivity extends AppCompatActivity {
         } catch (IllegalStateException ignored) {}
         btnPlay.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
         if (adapter != null) adapter.setPlayingActive(playing);
+        updateMediaSessionState();
+    }
+
+    private void updateMediaSessionState() {
+        if (mediaSession == null) return;
+        int state;
+        long pos = 0;
+        try {
+            if (player != null && isPrepared) {
+                state = player.isPlaying()
+                        ? PlaybackStateCompat.STATE_PLAYING
+                        : PlaybackStateCompat.STATE_PAUSED;
+                pos = player.getCurrentPosition();
+            } else if (playingIndex >= 0) {
+                state = PlaybackStateCompat.STATE_PAUSED;
+            } else {
+                state = PlaybackStateCompat.STATE_STOPPED;
+            }
+        } catch (IllegalStateException e) {
+            state = PlaybackStateCompat.STATE_NONE;
+        }
+        long actions = PlaybackStateCompat.ACTION_PLAY
+                | PlaybackStateCompat.ACTION_PAUSE
+                | PlaybackStateCompat.ACTION_PLAY_PAUSE
+                | PlaybackStateCompat.ACTION_SKIP_TO_NEXT
+                | PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+                | PlaybackStateCompat.ACTION_SEEK_TO
+                | PlaybackStateCompat.ACTION_STOP;
+        mediaSession.setPlaybackState(new PlaybackStateCompat.Builder()
+                .setActions(actions)
+                .setState(state, pos, 1f)
+                .build());
+    }
+
+    private void updateMediaSessionMetadata(Song song, String label, long durationMs) {
+        if (mediaSession == null || song == null) return;
+        MediaMetadataCompat.Builder b = new MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, song.name)
+                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST,
+                        label == null ? "" : label)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, song.name)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE,
+                        label == null ? "" : label);
+        if (durationMs > 0) {
+            b.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs);
+        }
+        mediaSession.setMetadata(b.build());
     }
 
     private void stopPlayer() {
@@ -1667,22 +1760,44 @@ public class MainActivity extends AppCompatActivity {
         }
         if (classifierPool.isEmpty()) return;
 
-        LinkedHashMap<String, AiClassifier.Item> unique = new LinkedHashMap<>();
-        for (Song s : songByPath.values()) {
-            if (isClassified(s)) continue;
-            String[] ta = LyricsFetcher.extractTitleArtist(s.name, s.folder);
-            String qk = LyricsFetcher.queryKey(ta[0], ta[1]);
-            if (unique.containsKey(qk)) continue;
-            unique.put(qk, new AiClassifier.Item(qk, ta[0], ta[1]));
-        }
-        if (unique.isEmpty()) return;
+        List<AiClassifier.Item> todo = buildScanItems(s -> !isClassified(s));
+        if (todo.isEmpty()) return;
 
-        List<AiClassifier.Item> todo = new ArrayList<>(unique.values());
         scanning = true;
         scanDone = 0;
         scanTotal = todo.size();
         updateSectionMeta();
         runNextBatch(classifierPool, todo, 0);
+    }
+
+    /**
+     * Build a deduplicated AI-scan queue by interleaving songs across
+     * folders round-robin, so a small batch reaches many artists/folders
+     * instead of getting stuck on a single folder's worth of one artist.
+     */
+    private List<AiClassifier.Item> buildScanItems(Predicate<Song> include) {
+        LinkedHashMap<String, List<Song>> byFolder = new LinkedHashMap<>();
+        for (String folder : folderNames) {
+            List<Song> in = folders.get(folder);
+            if (in == null) continue;
+            List<Song> eligible = new ArrayList<>();
+            for (Song s : in) if (include.test(s)) eligible.add(s);
+            if (!eligible.isEmpty()) byFolder.put(folder, eligible);
+        }
+        LinkedHashMap<String, AiClassifier.Item> unique = new LinkedHashMap<>();
+        int maxLen = 0;
+        for (List<Song> list : byFolder.values()) maxLen = Math.max(maxLen, list.size());
+        for (int i = 0; i < maxLen; i++) {
+            for (List<Song> list : byFolder.values()) {
+                if (i >= list.size()) continue;
+                Song s = list.get(i);
+                String[] ta = LyricsFetcher.extractTitleArtist(s.name, s.folder);
+                String qk = LyricsFetcher.queryKey(ta[0], ta[1]);
+                if (unique.containsKey(qk)) continue;
+                unique.put(qk, new AiClassifier.Item(qk, ta[0], ta[1]));
+            }
+        }
+        return new ArrayList<>(unique.values());
     }
 
     private void runNextBatch(final ClassifierPool pool,
@@ -1773,17 +1888,10 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
 
-        LinkedHashMap<String, AiClassifier.Item> unique = new LinkedHashMap<>();
-        for (Song s : songByPath.values()) {
-            if (!isClassified(s)) continue;
-            if (scenesForSong(s).contains(newScene)) continue;
-            String[] ta = LyricsFetcher.extractTitleArtist(s.name, s.folder);
-            String qk = LyricsFetcher.queryKey(ta[0], ta[1]);
-            if (unique.containsKey(qk)) continue;
-            unique.put(qk, new AiClassifier.Item(qk, ta[0], ta[1]));
-        }
+        List<AiClassifier.Item> items = buildScanItems(s ->
+                isClassified(s) && !scenesForSong(s).contains(newScene));
 
-        if (unique.isEmpty()) {
+        if (items.isEmpty()) {
             Toast.makeText(this, "已添加场景「" + newScene + "」",
                     Toast.LENGTH_SHORT).show();
             maybeStartClassifyScan();
@@ -1801,11 +1909,11 @@ public class MainActivity extends AppCompatActivity {
                 Toast.LENGTH_SHORT).show();
         scanning = true;
         scanDone = 0;
-        scanTotal = unique.size();
+        scanTotal = items.size();
         mergeStopScene = newScene;
         mergeStopTarget = target;
         updateSectionMeta();
-        runNextBatch(pool, new ArrayList<>(unique.values()), 0, true);
+        runNextBatch(pool, items, 0, true);
     }
 
     private void mergeClassificationIntoCache(Map<String, Set<String>> results) {
@@ -3225,6 +3333,11 @@ public class MainActivity extends AppCompatActivity {
         super.onDestroy();
         saveResumeState();
         stopPlayer();
+        if (mediaSession != null) {
+            mediaSession.setActive(false);
+            mediaSession.release();
+            mediaSession = null;
+        }
         PlayerKeepAliveService.stop(this);
     }
 }
